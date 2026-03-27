@@ -17,13 +17,31 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Pencil, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { MenuItem } from "../backend";
 import { useActor } from "../hooks/useActor";
 import { XLSX } from "../lib/xlsx-shim";
 
-const CATEGORIES = ["Starters", "Mains", "Beverages", "Desserts"];
+const CAT_STORAGE_KEY = "smartskale_menu_categories";
+const DEFAULT_CATEGORIES = ["Starters", "Mains", "Beverages", "Desserts"];
+
+function loadCategories(): string[] {
+  try {
+    const stored = localStorage.getItem(CAT_STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {
+    // ignore
+  }
+  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+  return DEFAULT_CATEGORIES;
+}
+
+function saveCategories(cats: string[]) {
+  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(cats));
+}
+
 const UNITS = [
   "plate",
   "piece",
@@ -115,26 +133,80 @@ type FormState = {
   unit: string;
 };
 
-const DEFAULT_FORM: FormState = {
-  category: "Starters",
-  name: "",
-  price: "",
-  description: "",
-  available: true,
-  unit: "plate",
-};
-
 export function MenuManagement() {
   const { actor, isFetching } = useActor();
+  const [categories, setCategories] = useState<string[]>(loadCategories);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [unitMap, setUnitMap] = useState<Record<string, string>>(loadUnitMap);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
-  const [form, setForm] = useState<FormState>(DEFAULT_FORM);
+  const [form, setForm] = useState<FormState>({
+    category: categories[0] ?? "Starters",
+    name: "",
+    price: "",
+    description: "",
+    available: true,
+    unit: "plate",
+  });
   const [saving, setSaving] = useState(false);
   const [seeded, setSeeded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [catDialogOpen, setCatDialogOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [editingCatIdx, setEditingCatIdx] = useState<number | null>(null);
+  const [editingCatValue, setEditingCatValue] = useState("");
+
+  const updateCategories = (cats: string[]) => {
+    setCategories(cats);
+    saveCategories(cats);
+  };
+
+  const handleAddCategory = () => {
+    const name = newCatName.trim();
+    if (!name) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (categories.includes(name)) {
+      toast.error("Category already exists");
+      return;
+    }
+    updateCategories([...categories, name]);
+    setNewCatName("");
+    toast.success(`Category "${name}" added`);
+  };
+
+  const handleSaveCategory = (idx: number) => {
+    const name = editingCatValue.trim();
+    if (!name) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (categories.includes(name) && categories[idx] !== name) {
+      toast.error("Category already exists");
+      return;
+    }
+    const updated = categories.map((c, i) => (i === idx ? name : c));
+    updateCategories(updated);
+    setEditingCatIdx(null);
+    toast.success("Category updated");
+  };
+
+  const handleDeleteCategory = (idx: number) => {
+    const cat = categories[idx];
+    const inUse = items.some((it) => it.category === cat);
+    if (inUse) {
+      toast.warning(
+        `Category "${cat}" is used by menu items. Reassign items first.`,
+      );
+      return;
+    }
+    if (!confirm(`Delete category "${cat}"?`)) return;
+    updateCategories(categories.filter((_, i) => i !== idx));
+    toast.success("Category deleted");
+  };
 
   const load = useCallback(
     async (skipSeed = false) => {
@@ -167,7 +239,14 @@ export function MenuManagement() {
 
   const openAdd = () => {
     setEditItem(null);
-    setForm(DEFAULT_FORM);
+    setForm({
+      category: categories[0] ?? "",
+      name: "",
+      price: "",
+      description: "",
+      available: true,
+      unit: "plate",
+    });
     setShowModal(true);
   };
 
@@ -199,7 +278,7 @@ export function MenuManagement() {
         saveUnitMap(newMap);
         toast.success("Item updated");
       } else {
-        const newItems = await actor.addMenuItem(
+        await actor.addMenuItem(
           form.category,
           form.name.trim(),
           Number.parseFloat(form.price),
@@ -214,7 +293,6 @@ export function MenuManagement() {
           setUnitMap(newMap);
           saveUnitMap(newMap);
         }
-        void newItems;
         toast.success("Item added");
       }
       setShowModal(false);
@@ -275,9 +353,7 @@ export function MenuManagement() {
     const arrayBuffer = await file.arrayBuffer();
     const wb = XLSX.read(arrayBuffer, { type: "array" });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {
-      defval: "",
-    });
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
     if (rows.length === 0) {
       toast.error("Excel file is empty or has no data rows");
       return;
@@ -314,7 +390,12 @@ export function MenuManagement() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const byCategory = CATEGORIES.reduce(
+  // Build byCategory including uncategorised items
+  const allCats = [...categories];
+  for (const item of items) {
+    if (!allCats.includes(item.category)) allCats.push(item.category);
+  }
+  const byCategory = allCats.reduce(
     (acc, cat) => {
       acc[cat] = items.filter((i) => i.category === cat);
       return acc;
@@ -341,7 +422,7 @@ export function MenuManagement() {
             Menu Management
           </h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {items.length} items across {CATEGORIES.length} categories
+            {items.length} items across {categories.length} categories
           </p>
         </div>
         <div className="flex gap-2">
@@ -368,13 +449,21 @@ export function MenuManagement() {
             className="hidden"
             onChange={handleImport}
           />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCatDialogOpen(true)}
+            data-ocid="menu.manage_categories_button"
+          >
+            Manage Categories
+          </Button>
           <Button data-ocid="menu.add_button" onClick={openAdd}>
             + Add Item
           </Button>
         </div>
       </div>
 
-      {CATEGORIES.map((cat) => (
+      {allCats.map((cat) => (
         <div
           key={cat}
           className="bg-card border border-border rounded-xl overflow-hidden shadow-card"
@@ -388,7 +477,7 @@ export function MenuManagement() {
           {byCategory[cat]?.length === 0 ? (
             <div
               className="p-6 text-center"
-              data-ocid={`menu.${cat.toLowerCase()}.empty_state`}
+              data-ocid={`menu.${cat.toLowerCase().replace(/\s+/g, "_")}.empty_state`}
             >
               <p className="text-muted-foreground text-sm">
                 No {cat.toLowerCase()} items
@@ -447,6 +536,7 @@ export function MenuManagement() {
         </div>
       ))}
 
+      {/* Add/Edit Item Dialog */}
       <Dialog open={showModal} onOpenChange={setShowModal}>
         <DialogContent className="sm:max-w-lg" data-ocid="menu.item.dialog">
           <DialogHeader>
@@ -465,7 +555,7 @@ export function MenuManagement() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {CATEGORIES.map((c) => (
+                  {categories.map((c) => (
                     <SelectItem key={c} value={c}>
                       {c}
                     </SelectItem>
@@ -559,6 +649,109 @@ export function MenuManagement() {
               disabled={saving || !form.name.trim() || !form.price}
             >
               {saving ? "Saving..." : editItem ? "Update Item" : "Add Item"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Categories Dialog */}
+      <Dialog open={catDialogOpen} onOpenChange={setCatDialogOpen}>
+        <DialogContent
+          className="sm:max-w-md"
+          data-ocid="menu.categories.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle>Menu Categories</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Input
+                className="h-9 flex-1"
+                placeholder="New category name"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddCategory()}
+                data-ocid="menu.new_category.input"
+              />
+              <Button
+                onClick={handleAddCategory}
+                data-ocid="menu.add_category.button"
+              >
+                Add
+              </Button>
+            </div>
+            <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+              {categories.map((cat, idx) => (
+                <div
+                  key={cat}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-muted/40"
+                >
+                  {editingCatIdx === idx ? (
+                    <>
+                      <Input
+                        className="h-8 flex-1"
+                        value={editingCatValue}
+                        onChange={(e) => setEditingCatValue(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleSaveCategory(idx)
+                        }
+                        autoFocus
+                        data-ocid={`menu.category.edit_input.${idx + 1}`}
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => handleSaveCategory(idx)}
+                        data-ocid={`menu.category.save_button.${idx + 1}`}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditingCatIdx(null)}
+                      >
+                        ✕
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex-1 text-sm font-medium text-foreground">
+                        {cat}
+                      </span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          setEditingCatIdx(idx);
+                          setEditingCatValue(cat);
+                        }}
+                        data-ocid={`menu.category.edit_button.${idx + 1}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteCategory(idx)}
+                        data-ocid={`menu.category.delete_button.${idx + 1}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCatDialogOpen(false)}
+              data-ocid="menu.categories.close_button"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

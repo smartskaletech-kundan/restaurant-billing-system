@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   LogOut,
   MessageCircle,
+  Moon,
   Package,
   QrCode,
   Receipt,
@@ -43,6 +44,7 @@ import { Inventory } from "./pages/Inventory";
 import { KitchenDisplay } from "./pages/KitchenDisplay";
 import { LoyaltyCRM } from "./pages/LoyaltyCRM";
 import { MenuManagement } from "./pages/MenuManagement";
+import { NightAudit } from "./pages/NightAudit";
 import { OrderManagement } from "./pages/OrderManagement";
 import { Purchases } from "./pages/Purchases";
 import { QRMenu } from "./pages/QRMenu";
@@ -80,7 +82,8 @@ export type Page =
   | "gift-cards"
   | "coupon-management"
   | "attendance-payroll"
-  | "whatsapp";
+  | "whatsapp"
+  | "night-audit";
 
 export interface SelectedTable {
   id: string;
@@ -127,6 +130,7 @@ const NAV_SECTIONS: NavSection[] = [
       { page: "due-management", label: "Due Management", Icon: AlertCircle },
       { page: "vendors", label: "Vendors", Icon: Truck },
       { page: "purchases", label: "Purchases", Icon: ShoppingCart },
+      { page: "night-audit", label: "Night Audit", Icon: Moon },
     ],
   },
   {
@@ -219,7 +223,7 @@ function AppShell() {
   // Display name (truncate if long)
   const displayName =
     restaurantName.length > 18
-      ? `${restaurantName.slice(0, 18)}…`
+      ? `${restaurantName.slice(0, 18)}\u2026`
       : restaurantName;
 
   return (
@@ -302,7 +306,7 @@ function AppShell() {
             <span>Logout</span>
           </button>
           <p className="text-white/35 text-xs text-center">
-            © {new Date().getFullYear()}.{" "}
+            &copy; {new Date().getFullYear()}.{" "}
             <a
               href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
               target="_blank"
@@ -382,6 +386,7 @@ function AppShell() {
           {currentPage === "coupon-management" && <CouponManagement />}
           {currentPage === "attendance-payroll" && <AttendancePayroll />}
           {currentPage === "whatsapp" && <WhatsAppIntegration />}
+          {currentPage === "night-audit" && <NightAudit />}
         </main>
       </div>
 

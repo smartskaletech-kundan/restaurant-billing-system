@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Package } from "lucide-react";
+import { Package, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { XLSX } from "../lib/xlsx-shim";
@@ -33,6 +33,14 @@ interface InventoryItem {
 }
 
 const STORAGE_KEY = "smartskale_inventory";
+const CAT_STORAGE_KEY = "smartskale_inventory_categories";
+const DEFAULT_CATEGORIES = [
+  "Vegetables",
+  "Dairy",
+  "Beverages",
+  "Dry Goods",
+  "Other",
+];
 const UNITS = ["kg", "L", "pcs", "box"];
 
 function load(): InventoryItem[] {
@@ -47,6 +55,21 @@ function save(list: InventoryItem[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
+function loadCategories(): string[] {
+  try {
+    const stored = localStorage.getItem(CAT_STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {
+    // ignore
+  }
+  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+  return DEFAULT_CATEGORIES;
+}
+
+function saveCategories(cats: string[]) {
+  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(cats));
+}
+
 const EMPTY_FORM = {
   name: "",
   category: "",
@@ -58,6 +81,7 @@ const EMPTY_FORM = {
 
 export function Inventory() {
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [categories, setCategories] = useState<string[]>(loadCategories);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<InventoryItem | null>(null);
@@ -65,9 +89,65 @@ export function Inventory() {
   const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Category management state
+  const [catDialogOpen, setCatDialogOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [editingCatIdx, setEditingCatIdx] = useState<number | null>(null);
+  const [editingCatValue, setEditingCatValue] = useState("");
+
   useEffect(() => {
     setItems(load());
   }, []);
+
+  const updateCategories = (cats: string[]) => {
+    setCategories(cats);
+    saveCategories(cats);
+  };
+
+  const handleAddCategory = () => {
+    const name = newCatName.trim();
+    if (!name) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (categories.includes(name)) {
+      toast.error("Category already exists");
+      return;
+    }
+    updateCategories([...categories, name]);
+    setNewCatName("");
+    toast.success(`Category "${name}" added`);
+  };
+
+  const handleSaveCategory = (idx: number) => {
+    const name = editingCatValue.trim();
+    if (!name) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (categories.includes(name) && categories[idx] !== name) {
+      toast.error("Category already exists");
+      return;
+    }
+    const updated = categories.map((c, i) => (i === idx ? name : c));
+    updateCategories(updated);
+    setEditingCatIdx(null);
+    toast.success("Category updated");
+  };
+
+  const handleDeleteCategory = (idx: number) => {
+    const cat = categories[idx];
+    const inUse = items.some((it) => it.category === cat);
+    if (inUse) {
+      toast.warning(
+        `Category "${cat}" is used by inventory items. Reassign them first.`,
+      );
+      return;
+    }
+    if (!confirm(`Delete category "${cat}"?`)) return;
+    updateCategories(categories.filter((_, i) => i !== idx));
+    toast.success("Category deleted");
+  };
 
   const filtered = items.filter(
     (it) =>
@@ -77,7 +157,7 @@ export function Inventory() {
 
   function openAdd() {
     setEditTarget(null);
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, category: categories[0] ?? "" });
     setDialogOpen(true);
   }
 
@@ -150,9 +230,7 @@ export function Inventory() {
     const arrayBuffer = await file.arrayBuffer();
     const wb = XLSX.read(arrayBuffer, { type: "array" });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {
-      defval: "",
-    });
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
     if (rows.length === 0) {
       toast.error("Excel file is empty or has no data rows");
       return;
@@ -222,6 +300,14 @@ export function Inventory() {
             className="hidden"
             onChange={handleImport}
           />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCatDialogOpen(true)}
+            data-ocid="inventory.manage_categories_button"
+          >
+            Manage Categories
+          </Button>
           <Button data-ocid="inventory.add_button" onClick={openAdd}>
             + Add Item
           </Button>
@@ -328,6 +414,7 @@ export function Inventory() {
         )}
       </div>
 
+      {/* Add/Edit Item Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-xl" data-ocid="inventory.dialog">
           <DialogHeader>
@@ -350,17 +437,25 @@ export function Inventory() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="inv-cat">Category</Label>
-              <Input
-                id="inv-cat"
-                className="h-9"
-                data-ocid="inventory.category_input"
+              <Label>Category</Label>
+              <Select
                 value={form.category}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, category: e.target.value }))
-                }
-                placeholder="e.g. Vegetables"
-              />
+                onValueChange={(v) => setForm((p) => ({ ...p, category: v }))}
+              >
+                <SelectTrigger
+                  className="h-9"
+                  data-ocid="inventory.category_select"
+                >
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label>Unit</Label>
@@ -445,6 +540,7 @@ export function Inventory() {
         </DialogContent>
       </Dialog>
 
+      {/* Delete Confirm */}
       <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <DialogContent data-ocid="inventory.delete.dialog">
           <DialogHeader>
@@ -467,6 +563,109 @@ export function Inventory() {
               data-ocid="inventory.delete.confirm_button"
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Categories Dialog */}
+      <Dialog open={catDialogOpen} onOpenChange={setCatDialogOpen}>
+        <DialogContent
+          className="sm:max-w-md"
+          data-ocid="inventory.categories.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle>Inventory Categories</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Input
+                className="h-9 flex-1"
+                placeholder="New category name"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddCategory()}
+                data-ocid="inventory.new_category.input"
+              />
+              <Button
+                onClick={handleAddCategory}
+                data-ocid="inventory.add_category.button"
+              >
+                Add
+              </Button>
+            </div>
+            <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+              {categories.map((cat, idx) => (
+                <div
+                  key={cat}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-muted/40"
+                >
+                  {editingCatIdx === idx ? (
+                    <>
+                      <Input
+                        className="h-8 flex-1"
+                        value={editingCatValue}
+                        onChange={(e) => setEditingCatValue(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleSaveCategory(idx)
+                        }
+                        autoFocus
+                        data-ocid={`inventory.category.edit_input.${idx + 1}`}
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => handleSaveCategory(idx)}
+                        data-ocid={`inventory.category.save_button.${idx + 1}`}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditingCatIdx(null)}
+                      >
+                        ✕
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex-1 text-sm font-medium text-foreground">
+                        {cat}
+                      </span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          setEditingCatIdx(idx);
+                          setEditingCatValue(cat);
+                        }}
+                        data-ocid={`inventory.category.edit_button.${idx + 1}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteCategory(idx)}
+                        data-ocid={`inventory.category.delete_button.${idx + 1}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCatDialogOpen(false)}
+              data-ocid="inventory.categories.close_button"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

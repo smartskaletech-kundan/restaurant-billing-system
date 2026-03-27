@@ -37,6 +37,7 @@ export function KitchenDisplay() {
   const { actor, isFetching } = useActor();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
 
@@ -53,15 +54,21 @@ export function KitchenDisplay() {
       console.error("Kitchen load error:", err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [actor]);
 
   useEffect(() => {
     if (!actor || isFetching) return;
     load();
-    const interval = setInterval(load, 15000); // refresh every 15s
+    const interval = setInterval(load, 3000); // refresh every 3s
     return () => clearInterval(interval);
   }, [actor, isFetching, load]);
+
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    await load();
+  };
 
   const updateStatus = async (orderId: string, newStatus: string) => {
     if (!actor) return;
@@ -186,17 +193,18 @@ export function KitchenDisplay() {
           </h2>
           <p className="text-muted-foreground text-sm mt-1">
             {orders.length} active order{orders.length !== 1 ? "s" : ""} ·
-            Auto-refreshes every 15s · Last:{" "}
-            {lastRefreshed.toLocaleTimeString()}
+            Auto-refreshes every 3s · Last: {lastRefreshed.toLocaleTimeString()}
           </p>
         </div>
         <Button
           type="button"
           data-ocid="kitchen.refresh.button"
           variant="outline"
-          onClick={load}
+          onClick={handleManualRefresh}
+          disabled={refreshing}
         >
-          🔄 Refresh Now
+          {refreshing ? <span className="animate-spin mr-1">⏳</span> : "🔄"}{" "}
+          {refreshing ? "Refreshing..." : "Refresh Now"}
         </Button>
       </div>
 
@@ -208,7 +216,12 @@ export function KitchenDisplay() {
             No active orders. Orders sent from Order Management will appear
             here.
           </p>
-          <Button variant="outline" className="mt-4" onClick={load}>
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={handleManualRefresh}
+            disabled={refreshing}
+          >
             🔄 Refresh
           </Button>
         </div>

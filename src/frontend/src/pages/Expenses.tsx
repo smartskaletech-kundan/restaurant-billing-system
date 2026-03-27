@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CreditCard } from "lucide-react";
+import { CreditCard, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -30,7 +30,8 @@ interface Expense {
 }
 
 const STORAGE_KEY = "smartskale_expenses";
-const CATEGORIES = [
+const CAT_STORAGE_KEY = "smartskale_expense_categories";
+const DEFAULT_CATEGORIES = [
   "Food & Beverage",
   "Utilities",
   "Salary",
@@ -50,22 +51,99 @@ function save(list: Expense[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
+function loadCategories(): string[] {
+  try {
+    const stored = localStorage.getItem(CAT_STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {
+    // ignore
+  }
+  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+  return DEFAULT_CATEGORIES;
+}
+
+function saveCategories(cats: string[]) {
+  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(cats));
+}
+
 export function Expenses() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [categories, setCategories] = useState<string[]>(loadCategories);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [form, setForm] = useState({
-    category: CATEGORIES[0],
+    category: "",
     description: "",
     amount: "",
     paidBy: "",
   });
 
+  // Category management state
+  const [catDialogOpen, setCatDialogOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [editingCatIdx, setEditingCatIdx] = useState<number | null>(null);
+  const [editingCatValue, setEditingCatValue] = useState("");
+
   useEffect(() => {
     setExpenses(load());
   }, []);
+
+  // Keep form.category in sync when categories change
+  useEffect(() => {
+    setForm((p) => ({ ...p, category: categories[0] ?? "" }));
+  }, [categories]);
+
+  const updateCategories = (cats: string[]) => {
+    setCategories(cats);
+    saveCategories(cats);
+  };
+
+  const handleAddCategory = () => {
+    const name = newCatName.trim();
+    if (!name) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (categories.includes(name)) {
+      toast.error("Category already exists");
+      return;
+    }
+    updateCategories([...categories, name]);
+    setNewCatName("");
+    toast.success(`Category "${name}" added`);
+  };
+
+  const handleSaveCategory = (idx: number) => {
+    const name = editingCatValue.trim();
+    if (!name) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (categories.includes(name) && categories[idx] !== name) {
+      toast.error("Category already exists");
+      return;
+    }
+    const updated = categories.map((c, i) => (i === idx ? name : c));
+    updateCategories(updated);
+    setEditingCatIdx(null);
+    toast.success("Category updated");
+  };
+
+  const handleDeleteCategory = (idx: number) => {
+    const cat = categories[idx];
+    const inUse = expenses.some((e) => e.category === cat);
+    if (inUse) {
+      toast.warning(
+        `Category "${cat}" is used by existing expenses. Reassign them first.`,
+      );
+      return;
+    }
+    if (!confirm(`Delete category "${cat}"?`)) return;
+    updateCategories(categories.filter((_, i) => i !== idx));
+    toast.success("Category deleted");
+  };
 
   const filtered = expenses.filter((e) => {
     if (!fromDate || !toDate) return true;
@@ -89,7 +167,7 @@ export function Expenses() {
     }
     const newE: Expense = {
       id: Date.now().toString(),
-      category: form.category,
+      category: form.category || categories[0] || "Other",
       description: form.description,
       amount: Number(form.amount),
       date: Date.now(),
@@ -100,7 +178,7 @@ export function Expenses() {
     save(updated);
     setDialogOpen(false);
     setForm({
-      category: CATEGORIES[0],
+      category: categories[0] ?? "",
       description: "",
       amount: "",
       paidBy: "",
@@ -126,12 +204,22 @@ export function Expenses() {
             {expenses.length} expense records
           </p>
         </div>
-        <Button
-          data-ocid="expenses.add_button"
-          onClick={() => setDialogOpen(true)}
-        >
-          + Add Expense
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCatDialogOpen(true)}
+            data-ocid="expenses.manage_categories_button"
+          >
+            Manage Categories
+          </Button>
+          <Button
+            data-ocid="expenses.add_button"
+            onClick={() => setDialogOpen(true)}
+          >
+            + Add Expense
+          </Button>
+        </div>
       </div>
 
       {/* Date Range Filter */}
@@ -274,7 +362,7 @@ export function Expenses() {
         )}
       </div>
 
-      {/* Add Dialog */}
+      {/* Add Expense Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-lg" data-ocid="expenses.dialog">
           <DialogHeader>
@@ -291,10 +379,10 @@ export function Expenses() {
                   className="h-9"
                   data-ocid="expenses.category_select"
                 >
-                  <SelectValue />
+                  <SelectValue placeholder="Select category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CATEGORIES.map((c) => (
+                  {categories.map((c) => (
                     <SelectItem key={c} value={c}>
                       {c}
                     </SelectItem>
@@ -383,6 +471,109 @@ export function Expenses() {
               data-ocid="expenses.delete.confirm_button"
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Categories Dialog */}
+      <Dialog open={catDialogOpen} onOpenChange={setCatDialogOpen}>
+        <DialogContent
+          className="sm:max-w-md"
+          data-ocid="expenses.categories.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle>Expense Categories</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Input
+                className="h-9 flex-1"
+                placeholder="New category name"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddCategory()}
+                data-ocid="expenses.new_category.input"
+              />
+              <Button
+                onClick={handleAddCategory}
+                data-ocid="expenses.add_category.button"
+              >
+                Add
+              </Button>
+            </div>
+            <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+              {categories.map((cat, idx) => (
+                <div
+                  key={cat}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-muted/40"
+                >
+                  {editingCatIdx === idx ? (
+                    <>
+                      <Input
+                        className="h-8 flex-1"
+                        value={editingCatValue}
+                        onChange={(e) => setEditingCatValue(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleSaveCategory(idx)
+                        }
+                        autoFocus
+                        data-ocid={`expenses.category.edit_input.${idx + 1}`}
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => handleSaveCategory(idx)}
+                        data-ocid={`expenses.category.save_button.${idx + 1}`}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditingCatIdx(null)}
+                      >
+                        ✕
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex-1 text-sm font-medium text-foreground">
+                        {cat}
+                      </span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          setEditingCatIdx(idx);
+                          setEditingCatValue(cat);
+                        }}
+                        data-ocid={`expenses.category.edit_button.${idx + 1}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteCategory(idx)}
+                        data-ocid={`expenses.category.delete_button.${idx + 1}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCatDialogOpen(false)}
+              data-ocid="expenses.categories.close_button"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -5,6 +5,7 @@ import Map "mo:core/Map";
 import Nat "mo:core/Nat";
 import Iter "mo:core/Iter";
 import Float "mo:core/Float";
+import Outcall "./http-outcalls/outcall";
 
 actor {
   // ─── Types ──────────────────────────────────────────────────────────
@@ -85,6 +86,18 @@ actor {
     date : Int; paymentStatus : Text; notes : Text;
   };
 
+  // SMS Gateway configuration
+  type SmsConfig = {
+    provider : Text;     // "msg91" | "fast2sms" | "twilio"
+    apiKey : Text;       // MSG91 authkey / Fast2SMS authorization / Twilio Auth Token
+    accountSid : Text;   // Twilio Account SID (empty for others)
+    senderId : Text;     // Sender ID / From number
+    templateId : Text;   // DLT template ID (required by Indian regulators)
+    enabled : Bool;
+  };
+
+  type OtpResult = { success : Bool; response : Text };
+
   // ─── Seed Data ────────────────────────────────────────────────────────
   func generateDefaultTables() : [Table] {
     let tableIter = Nat.range(1, 10);
@@ -117,6 +130,15 @@ actor {
     footerMessage = "Thank you for dining with us!";
   };
 
+  let defaultSmsConfig : SmsConfig = {
+    provider = "msg91";
+    apiKey = "";
+    accountSid = "";
+    senderId = "RESTAL";
+    templateId = "";
+    enabled = false;
+  };
+
   // ─── Persistent State ─────────────────────────────────────────────────
   let tables = Map.empty<Text, Table>();
   let menuItems = Map.empty<Text, MenuItem>();
@@ -125,7 +147,6 @@ actor {
   let bills = Map.empty<Text, BillCore>();
   let billMeta = Map.empty<Text, BillMeta>();
   // billRestaurantIds: NEW stable map (v3) — maps billId → restaurantId
-  // Being a new variable, it has no compatibility constraints with previous versions
   let billRestaurantIds = Map.empty<Text, Text>();
   let customers = Map.empty<Text, Customer>();
   let inventoryItems = Map.empty<Text, InventoryItem>();
@@ -134,6 +155,7 @@ actor {
   let purchases = Map.empty<Text, Purchase>();
   var settings = defaultSettings;
   var billCounter = 1;
+  var smsConfig = defaultSmsConfig;
 
   // ─── Helpers ──────────────────────────────────────────────────────────
   func mergeBill(core : BillCore) : Bill {
@@ -290,7 +312,6 @@ actor {
     bills.values().map(mergeBill).toArray();
   };
 
-  // Returns only bills belonging to the given restaurant
   public query func getBillsByRestaurant(restaurantId : Text) : async [Bill] {
     bills.values()
       .filter(func(b) {
@@ -303,7 +324,6 @@ actor {
       .toArray();
   };
 
-  // Delete all bills for a restaurant; returns count removed
   public shared func clearRestaurantBills(restaurantId : Text) : async Nat {
     let toDelete = bills.values()
       .filter(func(b) {
@@ -387,7 +407,6 @@ actor {
         bills.add(b.id, updatedCore);
         let newMeta : BillMeta = { settlementMode = b.settlementMode; cashierName = b.cashierName };
         upsertMeta(b.id, newMeta);
-        // preserve restaurantId on update
         upsertRestaurantId(b.id, b.restaurantId);
         ?mergeBill(updatedCore);
       };
@@ -411,6 +430,60 @@ actor {
 
   public shared func updateSettings(newSettings : RestaurantSettings) : async () {
     settings := newSettings;
+  };
+
+  // ─── SMS / WhatsApp Gateway Functions ────────────────────────────────
+  public query func getSmsConfig() : async SmsConfig { smsConfig };
+
+  public shared func updateSmsConfig(config : SmsConfig) : async () {
+    smsConfig := config;
+  };
+
+  // Send OTP via configured SMS/WhatsApp gateway
+  public shared func sendOtp(mobile : Text, otpCode : Text) : async OtpResult {
+    if (not smsConfig.enabled) {
+      return { success = false; response = "SMS gateway not configured. Please enable it in Settings." };
+    };
+    if (smsConfig.apiKey == "") {
+      return { success = false; response = "API key is missing. Please configure SMS gateway in Settings." };
+    };
+
+    let message = "Your coupon redemption OTP is: " # otpCode # ". Valid for 5 minutes. Do not share with anyone.";
+
+    try {
+      let response = if (smsConfig.provider == "msg91") {
+        // MSG91: POST JSON
+        let url = "https://api.msg91.com/api/v5/otp?template_id=" # smsConfig.templateId # "&mobile=91" # mobile # "&authkey=" # smsConfig.apiKey # "&otp=" # otpCode;
+        await Outcall.httpGetRequest(url, [
+          { name = "Content-Type"; value = "application/json" }
+        ], transform);
+      } else if (smsConfig.provider == "fast2sms") {
+        // Fast2SMS: GET request
+        let url = "https://www.fast2sms.com/dev/bulkV2?authorization=" # smsConfig.apiKey # "&variables_values=" # otpCode # "&route=dlt&numbers=" # mobile # "&flash=0";
+        await Outcall.httpGetRequest(url, [
+          { name = "cache-control"; value = "no-cache" }
+        ], transform);
+      } else if (smsConfig.provider == "twilio") {
+        // Twilio: POST form-encoded
+        let url = "https://api.twilio.com/2010-04-01/Accounts/" # smsConfig.accountSid # "/Messages.json";
+        let body = "To=%2B" # mobile # "&From=" # smsConfig.senderId # "&Body=" # message;
+        let credentials = smsConfig.accountSid # ":" # smsConfig.apiKey;
+        await Outcall.httpPostRequest(url, [
+          { name = "Content-Type"; value = "application/x-www-form-urlencoded" },
+          { name = "Authorization"; value = "Basic " # credentials }
+        ], body, transform);
+      } else {
+        return { success = false; response = "Unknown provider: " # smsConfig.provider };
+      };
+      { success = true; response };
+    } catch (e) {
+      { success = false; response = "Failed to send OTP. Check gateway settings and try again." };
+    };
+  };
+
+  // Transform function required by HTTP outcalls (strips non-deterministic headers)
+  public query func transform(input : Outcall.TransformationInput) : async Outcall.TransformationOutput {
+    Outcall.transform(input);
   };
 
   // ─── Customer Functions ───────────────────────────────────────────────

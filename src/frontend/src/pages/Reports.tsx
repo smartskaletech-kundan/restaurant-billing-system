@@ -69,7 +69,7 @@ function parseSplitMode(mode: string): {
 } {
   const result = { cash: 0, hdfc: 0, sbi: 0, upi: 0 };
   if (!mode.startsWith("Split(")) return result;
-  const inner = mode.slice(6, -1); // remove "Split(" and ")"
+  const inner = mode.slice(6, -1);
   for (const part of inner.split(",")) {
     const [key, val] = part.split(":");
     const amount = Number.parseFloat(val) || 0;
@@ -188,7 +188,6 @@ export function Reports() {
       .slice(0, 8);
   }, [filteredBills]);
 
-  // Mode-wise summary (accumulates split sub-totals into each mode)
   const modeSummary = useMemo(() => {
     const acc: Record<string, { count: number; total: number }> = {
       Cash: { count: 0, total: 0 },
@@ -200,10 +199,8 @@ export function Reports() {
     for (const b of filteredBills) {
       const m = b.settlementMode || "Cash";
       if (m.startsWith("Split(")) {
-        // Count as Split bill + distribute amounts to sub-modes
         acc.Split.count += 1;
         acc.Split.total += b.total;
-        // For mode summary cards we just show the full split total under Split
       } else {
         const key = m in acc ? m : "Cash";
         acc[key].count += 1;
@@ -213,7 +210,6 @@ export function Reports() {
     return Object.entries(acc).map(([mode, data]) => ({ mode, ...data }));
   }, [filteredBills]);
 
-  // Split sub-totals across all split bills
   const splitSubTotals = useMemo(() => {
     const sub = { cash: 0, hdfc: 0, sbi: 0, upi: 0 };
     for (const b of filteredBills) {
@@ -232,7 +228,6 @@ export function Reports() {
     b.settlementMode?.startsWith("Split("),
   );
 
-  // Settlement filtered bills
   const settlementBills = useMemo(() => {
     const withCashier = filteredBills.map((b) => ({
       ...b,
@@ -246,7 +241,6 @@ export function Reports() {
   const settlementTotal = settlementBills.reduce((s, b) => s + b.total, 0);
   const maxRevenue = revenueByTable.length > 0 ? revenueByTable[0][1] : 1;
 
-  // Cashier report rows — one per bill
   const cashierRows = useMemo(() => {
     return filteredBills.map((b) => {
       const mode = b.settlementMode || "Cash";
@@ -289,6 +283,133 @@ export function Reports() {
       };
     });
   }, [filteredBills, restaurantName]);
+
+  // Item-wise sale rows — one row per item per bill
+  const itemWiseRows = useMemo(() => {
+    const rows: Array<{
+      date: string;
+      billNo: string;
+      billTime: string;
+      table: string;
+      goodsAmt: number;
+      disc: number;
+      nonTaxableSale: number;
+      taxableSale: number;
+      tax: number;
+      rndoff: number;
+      billAmt: number;
+      itemName: string;
+      qty: number;
+      rate: number;
+      amount: number;
+      itemDisc: number;
+      paymentMode: string;
+      company: string;
+      gstNo: string;
+    }> = [];
+
+    for (const b of filteredBills) {
+      const ms = Number(b.createdAt) / 1_000_000;
+      const d = new Date(ms);
+      const dateStr = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+      const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+
+      // Look up customer by matching mobile or by any link if stored on bill
+      // Bills don't currently carry a customerMobile field, so we do a basic lookup
+      // (future: match by b.customerMobile if available)
+      let company = "";
+      let gstNo = "";
+      // Try to find customer — bills don't have a mobile field in current schema
+      // so we leave blank unless a match is possible in future
+
+      const taxableSale = b.subtotal - (b.discount ?? 0);
+      const rndoffRaw =
+        b.total - Math.round(b.subtotal + b.taxAmount - (b.discount ?? 0));
+      const rndoff = Math.abs(rndoffRaw) < 0.5 ? rndoffRaw : 0;
+
+      const billNoFormatted = String(b.billNumber);
+
+      for (const item of b.items) {
+        rows.push({
+          date: dateStr,
+          billNo: billNoFormatted,
+          billTime: timeStr,
+          table: b.tableName,
+          goodsAmt: b.subtotal,
+          disc: b.discount ?? 0,
+          nonTaxableSale: 0,
+          taxableSale,
+          tax: b.taxAmount,
+          rndoff,
+          billAmt: b.total,
+          itemName: item.name,
+          qty: Number(item.quantity),
+          rate: item.price,
+          amount: item.subtotal,
+          itemDisc: 0,
+          paymentMode: b.settlementMode?.startsWith("Split")
+            ? "Split"
+            : b.settlementMode || "Cash",
+          company,
+          gstNo,
+        });
+      }
+    }
+    return rows;
+  }, [filteredBills]);
+
+  function exportItemWiseReport() {
+    const headers = [
+      "Date",
+      "Bill No.",
+      "Bill Time",
+      "Table",
+      "Goods Amt",
+      "Disc.",
+      "Non-Taxable Sale",
+      "Taxable Sale",
+      "Tax",
+      "Rndoff",
+      "Bill Amt.",
+      "Item Name",
+      "Qty",
+      "Rate",
+      "Amount",
+      "ItemDisc",
+      "Payment Mode",
+      "Company",
+      "GSTNO",
+    ];
+    const rows = itemWiseRows.map((r) => [
+      r.date,
+      r.billNo,
+      r.billTime,
+      r.table,
+      r.goodsAmt.toFixed(2),
+      r.disc.toFixed(2),
+      r.nonTaxableSale.toFixed(2),
+      r.taxableSale.toFixed(2),
+      r.tax.toFixed(2),
+      r.rndoff.toFixed(2),
+      r.billAmt.toFixed(2),
+      r.itemName,
+      r.qty,
+      r.rate.toFixed(2),
+      r.amount.toFixed(2),
+      r.itemDisc,
+      r.paymentMode,
+      r.company,
+      r.gstNo,
+    ]);
+    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `item-wise-sale-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   function exportCashierReport() {
     const headers = [
@@ -347,6 +468,18 @@ export function Reports() {
       </div>
     );
   }
+
+  // Item wise summary totals
+  const iwTotalGoodsAmt = itemWiseRows.reduce((s, r) => s + r.goodsAmt, 0);
+  const iwTotalDisc = itemWiseRows.reduce((s, r) => s + r.disc, 0);
+  const iwTotalTaxableSale = itemWiseRows.reduce(
+    (s, r) => s + r.taxableSale,
+    0,
+  );
+  const iwTotalTax = itemWiseRows.reduce((s, r) => s + r.tax, 0);
+  const iwTotalBillAmt = itemWiseRows.reduce((s, r) => s + r.billAmt, 0);
+  const iwTotalQty = itemWiseRows.reduce((s, r) => s + r.qty, 0);
+  const iwTotalAmount = itemWiseRows.reduce((s, r) => s + r.amount, 0);
 
   return (
     <div className="space-y-6" data-ocid="reports.page">
@@ -494,6 +627,9 @@ export function Reports() {
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="settlement">Settlement Report</TabsTrigger>
           <TabsTrigger value="cashier">Cashier Report</TabsTrigger>
+          <TabsTrigger value="itemwise" data-ocid="reports.itemwise.tab">
+            Item Wise Sale
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="analytics" className="mt-4">
@@ -597,7 +733,6 @@ export function Reports() {
             ))}
           </div>
 
-          {/* Split sub-totals panel */}
           {hasSplitBills && (
             <Card className="border-dashed border-muted-foreground/30">
               <CardHeader className="pb-2 pt-3 px-4">
@@ -811,6 +946,7 @@ export function Reports() {
               variant="outline"
               onClick={exportCashierReport}
               className="gap-2"
+              data-ocid="reports.cashier.export_button"
             >
               <Download className="h-4 w-4" /> Export CSV
             </Button>
@@ -987,6 +1123,206 @@ export function Reports() {
                     <td
                       className="px-3 py-2 border-r border-border"
                       colSpan={5}
+                    />
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </TabsContent>
+
+        {/* ITEM WISE SALE TAB */}
+        <TabsContent
+          value="itemwise"
+          className="mt-4 space-y-4"
+          data-ocid="reports.itemwise.panel"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-foreground">
+                Item Wise Detail Sale Report
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                One row per item per bill — {itemWiseRows.length} line items
+                across {filteredBills.length} bills
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={exportItemWiseReport}
+              className="gap-2"
+              data-ocid="reports.itemwise.export_button"
+            >
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          </div>
+
+          <div
+            className="overflow-x-auto rounded-xl border border-border shadow-sm"
+            data-ocid="reports.itemwise.table"
+          >
+            <table className="w-full text-xs whitespace-nowrap">
+              <thead>
+                <tr className="bg-muted/60 border-b border-border">
+                  {[
+                    "Date",
+                    "Bill No.",
+                    "Bill Time",
+                    "Table",
+                    "Goods Amt",
+                    "Disc.",
+                    "Non-Taxable Sale",
+                    "Taxable Sale",
+                    "Tax",
+                    "Rndoff",
+                    "Bill Amt.",
+                    "Item Name",
+                    "Qty",
+                    "Rate",
+                    "Amount",
+                    "ItemDisc",
+                    "Payment Mode",
+                    "Company",
+                    "GSTNO",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="px-3 py-2.5 text-left font-semibold text-muted-foreground border-r border-border last:border-r-0"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {itemWiseRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={19}
+                      className="text-center py-12 text-muted-foreground"
+                      data-ocid="reports.itemwise.empty_state"
+                    >
+                      No bills found for this period
+                    </td>
+                  </tr>
+                ) : (
+                  itemWiseRows.map((r, i) => (
+                    <tr
+                      key={`${r.billNo}-${r.itemName}-${i}`}
+                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                      data-ocid={`reports.itemwise.item.${i + 1}`}
+                    >
+                      <td className="px-3 py-2 text-muted-foreground border-r border-border">
+                        {r.date}
+                      </td>
+                      <td className="px-3 py-2 font-mono border-r border-border">
+                        {r.billNo}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground border-r border-border">
+                        {r.billTime}
+                      </td>
+                      <td className="px-3 py-2 border-r border-border">
+                        {r.table}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.goodsAmt.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.disc > 0 ? (
+                          <span className="text-orange-600">
+                            {r.disc.toFixed(2)}
+                          </span>
+                        ) : (
+                          "0.00"
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        0.00
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.taxableSale.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.tax.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.rndoff.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold border-r border-border">
+                        {r.billAmt.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 font-medium border-r border-border">
+                        {r.itemName}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.qty}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.rate.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        {r.amount.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right border-r border-border">
+                        0.00
+                      </td>
+                      <td className="px-3 py-2 border-r border-border">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-xs">
+                          {r.paymentMode}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground border-r border-border">
+                        {r.company || "—"}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        {r.gstNo || "—"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+              {itemWiseRows.length > 0 && (
+                <tfoot>
+                  <tr className="bg-muted/60 border-t-2 border-border font-semibold text-xs">
+                    <td
+                      className="px-3 py-2 border-r border-border"
+                      colSpan={4}
+                    >
+                      TOTAL ({itemWiseRows.length} items)
+                    </td>
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      {iwTotalGoodsAmt.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-orange-600 border-r border-border">
+                      {iwTotalDisc.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      0.00
+                    </td>
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      {iwTotalTaxableSale.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      {iwTotalTax.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      —
+                    </td>
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      {iwTotalBillAmt.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 border-r border-border" />
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      {iwTotalQty}
+                    </td>
+                    <td className="px-3 py-2 border-r border-border" />
+                    <td className="px-3 py-2 text-right border-r border-border">
+                      {iwTotalAmount.toFixed(2)}
+                    </td>
+                    <td
+                      className="px-3 py-2 border-r border-border"
+                      colSpan={4}
                     />
                   </tr>
                 </tfoot>

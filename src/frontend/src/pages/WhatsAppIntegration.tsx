@@ -22,14 +22,21 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  BarChart2,
   CheckCircle,
   ExternalLink,
+  Loader2,
   MessageSquare,
   Plus,
+  Printer,
+  Send,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import type { Bill } from "../backend";
+import { useRestaurant } from "../context/RestaurantContext";
+import { useActor } from "../hooks/useActor";
 
 interface Template {
   id: number;
@@ -155,6 +162,918 @@ const statusColor: Record<string, string> = {
   Failed: "bg-red-500/20 text-red-400",
 };
 
+// ---- Summary Report Tab ----
+
+type PeriodType = "daily" | "monthly" | "between";
+
+interface SalesSummary {
+  totalSales: number;
+  totalBills: number;
+  avgBill: number;
+  cash: number;
+  card: number;
+  upi: number;
+  split: number;
+}
+
+interface ReceiptSummary {
+  total: number;
+  items: { billNo: string; amount: number; mode: string; date: string }[];
+}
+
+interface ExpenseSummary {
+  total: number;
+  byCategory: Record<string, number>;
+}
+
+interface PurchaseSummary {
+  total: number;
+  byVendor: Record<string, number>;
+}
+
+function isInRange(ms: number, from: Date, to: Date): boolean {
+  const d = new Date(ms);
+  return d >= from && d <= to;
+}
+
+function SummaryReport() {
+  const { restaurantId } = useRestaurant();
+  const { actor, isFetching } = useActor();
+
+  const currency =
+    JSON.parse(
+      localStorage.getItem(`smartskale_settings_${restaurantId}`) || "{}",
+    ).currency || "₹";
+
+  const today = new Date().toISOString().split("T")[0];
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1;
+
+  const [period, setPeriod] = useState<PeriodType>("daily");
+  const [dailyDate, setDailyDate] = useState(today);
+  const [monthlyYear, setMonthlyYear] = useState(String(currentYear));
+  const [monthlyMonth, setMonthlyMonth] = useState(
+    String(currentMonth).padStart(2, "0"),
+  );
+  const [fromDate, setFromDate] = useState(today);
+  const [toDate, setToDate] = useState(today);
+
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [loadingBills, setLoadingBills] = useState(true);
+  const [generated, setGenerated] = useState(false);
+
+  const [salesSummary, setSalesSummary] = useState<SalesSummary | null>(null);
+  const [receiptSummary, setReceiptSummary] = useState<ReceiptSummary | null>(
+    null,
+  );
+  const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary | null>(
+    null,
+  );
+  const [purchaseSummary, setPurchaseSummary] =
+    useState<PurchaseSummary | null>(null);
+  const [reconciliationData, setReconciliationData] = useState<any | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!actor || isFetching) return;
+    (async () => {
+      try {
+        const result = await (actor as any).getBillsByRestaurant(restaurantId);
+        setBills(result || []);
+      } catch (e) {
+        console.error("Failed to load bills", e);
+      } finally {
+        setLoadingBills(false);
+      }
+    })();
+  }, [actor, isFetching, restaurantId]);
+
+  function getDateRange(): [Date, Date] {
+    if (period === "daily") {
+      const d = new Date(dailyDate);
+      const start = new Date(d);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(d);
+      end.setHours(23, 59, 59, 999);
+      return [start, end];
+    }
+    if (period === "monthly") {
+      const start = new Date(
+        Number(monthlyYear),
+        Number(monthlyMonth) - 1,
+        1,
+        0,
+        0,
+        0,
+        0,
+      );
+      const end = new Date(
+        Number(monthlyYear),
+        Number(monthlyMonth),
+        0,
+        23,
+        59,
+        59,
+        999,
+      );
+      return [start, end];
+    }
+    // between
+    const start = new Date(fromDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(toDate);
+    end.setHours(23, 59, 59, 999);
+    return [start, end];
+  }
+
+  function generateReport() {
+    const [start, end] = getDateRange();
+
+    // Bills
+    const filteredBills = bills.filter((b) => {
+      const ms = Number(b.createdAt) / 1_000_000;
+      return isInRange(ms, start, end);
+    });
+
+    const totalSales = filteredBills.reduce((s, b) => s + Number(b.total), 0);
+    const totalBills = filteredBills.length;
+    const avgBill = totalBills > 0 ? totalSales / totalBills : 0;
+    const cash = filteredBills
+      .filter((b) => (b.settlementMode || "") === "cash")
+      .reduce((s, b) => s + Number(b.total), 0);
+    const card = filteredBills
+      .filter((b) => (b.settlementMode || "") === "card")
+      .reduce((s, b) => s + Number(b.total), 0);
+    const upi = filteredBills
+      .filter((b) => (b.settlementMode || "") === "upi")
+      .reduce((s, b) => s + Number(b.total), 0);
+    const split = filteredBills
+      .filter((b) => (b.settlementMode || "") === "split")
+      .reduce((s, b) => s + Number(b.total), 0);
+
+    setSalesSummary({
+      totalSales,
+      totalBills,
+      avgBill,
+      cash,
+      card,
+      upi,
+      split,
+    });
+
+    setReceiptSummary({
+      total: totalSales,
+      items: filteredBills.map((b) => ({
+        billNo: String(b.billNumber || b.id || ""),
+        amount: Number(b.total),
+        mode: String(b.settlementMode || "cash"),
+        date: new Date(Number(b.createdAt) / 1_000_000).toLocaleDateString(
+          "en-IN",
+        ),
+      })),
+    });
+
+    // Expenses
+    const expenses: any[] = (() => {
+      try {
+        return JSON.parse(localStorage.getItem("smartskale_expenses") || "[]");
+      } catch {
+        return [];
+      }
+    })();
+    const filteredExpenses = expenses.filter((e) =>
+      isInRange(e.date, start, end),
+    );
+    const expTotal = filteredExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const byCat: Record<string, number> = {};
+    for (const e of filteredExpenses) {
+      byCat[e.category] = (byCat[e.category] || 0) + Number(e.amount);
+    }
+    setExpenseSummary({ total: expTotal, byCategory: byCat });
+
+    // Purchases
+    const purchases: any[] = (() => {
+      try {
+        return JSON.parse(localStorage.getItem("smartskale_purchases") || "[]");
+      } catch {
+        return [];
+      }
+    })();
+    const filteredPurchases = purchases.filter((p) =>
+      isInRange(p.date, start, end),
+    );
+    const purTotal = filteredPurchases.reduce(
+      (s, p) => s + Number(p.netTotal || p.totalAmount || 0),
+      0,
+    );
+    const byVendor: Record<string, number> = {};
+    for (const p of filteredPurchases) {
+      byVendor[p.vendorName] =
+        (byVendor[p.vendorName] || 0) +
+        Number(p.netTotal || p.totalAmount || 0);
+    }
+    setPurchaseSummary({ total: purTotal, byVendor });
+
+    // Night Audit Reconciliation
+    const audits: any[] = (() => {
+      try {
+        return JSON.parse(
+          localStorage.getItem("smartskale_night_audits") || "[]",
+        );
+      } catch {
+        return [];
+      }
+    })();
+    if (period === "daily") {
+      const rec = audits.find((a) => a.date === dailyDate) || null;
+      setReconciliationData(rec ? [rec] : []);
+    } else {
+      const filtered = audits.filter((a) => {
+        const d = new Date(a.date);
+        d.setHours(12, 0, 0, 0);
+        return d >= start && d <= end;
+      });
+      setReconciliationData(filtered);
+    }
+
+    setGenerated(true);
+    toast.success("Report generated successfully");
+  }
+
+  function buildWhatsAppMessage(): string {
+    if (!salesSummary || !receiptSummary || !expenseSummary || !purchaseSummary)
+      return "";
+
+    const periodLabel =
+      period === "daily"
+        ? `Date: ${dailyDate}`
+        : period === "monthly"
+          ? `Month: ${monthlyMonth}/${monthlyYear}`
+          : `Period: ${fromDate} to ${toDate}`;
+
+    let msg = `🏪 *Restaurant Summary Report*\n${periodLabel}\n\n`;
+
+    msg += "💰 *SALE REPORT*\n";
+    msg += `Total Sales: ${currency}${salesSummary.totalSales.toFixed(2)}\n`;
+    msg += `Total Bills: ${salesSummary.totalBills}\n`;
+    msg += `Avg Bill Value: ${currency}${salesSummary.avgBill.toFixed(2)}\n`;
+    msg += `Cash: ${currency}${salesSummary.cash.toFixed(2)} | Card: ${currency}${salesSummary.card.toFixed(2)} | UPI: ${currency}${salesSummary.upi.toFixed(2)} | Split: ${currency}${salesSummary.split.toFixed(2)}\n\n`;
+
+    msg += "🧾 *RECEIPT REPORT*\n";
+    msg += `Total Receipts: ${currency}${receiptSummary.total.toFixed(2)}\n\n`;
+
+    msg += "💸 *EXPENSE REPORT*\n";
+    msg += `Total Expenses: ${currency}${expenseSummary.total.toFixed(2)}\n`;
+    for (const [cat, amt] of Object.entries(expenseSummary.byCategory)) {
+      msg += `  ${cat}: ${currency}${Number(amt).toFixed(2)}\n`;
+    }
+    msg += "\n";
+
+    msg += "🛋️ *PURCHASE REPORT*\n";
+    msg += `Total Purchases: ${currency}${purchaseSummary.total.toFixed(2)}\n`;
+    for (const [vendor, amt] of Object.entries(purchaseSummary.byVendor)) {
+      msg += `  ${vendor}: ${currency}${Number(amt).toFixed(2)}\n`;
+    }
+
+    if (reconciliationData && reconciliationData.length > 0) {
+      msg += "\n💵 *CASH HANDOVER / RECONCILIATION*\n";
+      if (period === "daily" || reconciliationData.length === 1) {
+        const r = reconciliationData[0];
+        msg += `Date: ${r.date}\n`;
+        if (r.openingFloat !== undefined)
+          msg += `Opening Float: ${currency}${Number(r.openingFloat).toFixed(2)}\n`;
+        if (r.expectedCash !== undefined)
+          msg += `Expected Cash: ${currency}${Number(r.expectedCash).toFixed(2)}\n`;
+        if (r.cashHandover !== undefined)
+          msg += `Actual Handover: ${currency}${Number(r.cashHandover).toFixed(2)}\n`;
+        if (r.cashVariance !== undefined) {
+          const v = Number(r.cashVariance);
+          const varLabel =
+            v === 0
+              ? "BALANCED"
+              : v < 0
+                ? `SHORT ${currency}${Math.abs(v).toFixed(2)}`
+                : `OVER ${currency}${v.toFixed(2)}`;
+          msg += `Variance: ${varLabel}\n`;
+        }
+        if (r.closingStaff) msg += `Closing Staff: ${r.closingStaff}\n`;
+        if (r.shiftRemarks) msg += `Shift Remarks: ${r.shiftRemarks}\n`;
+      } else {
+        msg += "Date | Handover | Variance\n";
+        for (const r of reconciliationData) {
+          const v =
+            r.cashVariance !== undefined ? Number(r.cashVariance) : null;
+          const varLabel =
+            v === null
+              ? "-"
+              : v === 0
+                ? "BALANCED"
+                : v < 0
+                  ? `SHORT ${currency}${Math.abs(v).toFixed(2)}`
+                  : `OVER ${currency}${v.toFixed(2)}`;
+          msg += `${r.date} | ${currency}${Number(r.cashHandover || 0).toFixed(2)} | ${varLabel}\n`;
+        }
+      }
+    }
+
+    return msg;
+  }
+
+  function sendViaWhatsApp() {
+    if (!generated) {
+      toast.error("Please generate the report first");
+      return;
+    }
+    const msg = buildWhatsAppMessage();
+    const ownerPhone =
+      localStorage.getItem(`${restaurantId}_owner_whatsapp_number`) || "";
+    const cleanPhone = ownerPhone.replace(/\D/g, "");
+    const url = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`
+      : `https://web.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(url, "_blank");
+  }
+
+  const months = [
+    { value: "01", label: "January" },
+    { value: "02", label: "February" },
+    { value: "03", label: "March" },
+    { value: "04", label: "April" },
+    { value: "05", label: "May" },
+    { value: "06", label: "June" },
+    { value: "07", label: "July" },
+    { value: "08", label: "August" },
+    { value: "09", label: "September" },
+    { value: "10", label: "October" },
+    { value: "11", label: "November" },
+    { value: "12", label: "December" },
+  ];
+  const years = Array.from({ length: 5 }, (_, i) =>
+    String(currentYear - 2 + i),
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Period Selector */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <BarChart2 className="h-4 w-4" /> Report Period
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-2">
+            {(["daily", "monthly", "between"] as const).map((p) => (
+              <Button
+                key={p}
+                size="sm"
+                variant={period === p ? "default" : "outline"}
+                data-ocid={`wa_report.period_${p}.button`}
+                onClick={() => {
+                  setPeriod(p);
+                  setGenerated(false);
+                }}
+                className="capitalize"
+              >
+                {p === "between"
+                  ? "Between Dates"
+                  : p.charAt(0).toUpperCase() + p.slice(1)}
+              </Button>
+            ))}
+          </div>
+
+          {period === "daily" && (
+            <div className="flex items-center gap-3">
+              <Label>Date</Label>
+              <Input
+                type="date"
+                value={dailyDate}
+                onChange={(e) => {
+                  setDailyDate(e.target.value);
+                  setGenerated(false);
+                }}
+                className="w-48 h-9"
+                data-ocid="wa_report.daily_date.input"
+              />
+            </div>
+          )}
+
+          {period === "monthly" && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <Label>Month</Label>
+              <Select
+                value={monthlyMonth}
+                onValueChange={(v) => {
+                  setMonthlyMonth(v);
+                  setGenerated(false);
+                }}
+              >
+                <SelectTrigger
+                  className="w-40 h-9"
+                  data-ocid="wa_report.monthly_month.select"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {months.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={monthlyYear}
+                onValueChange={(v) => {
+                  setMonthlyYear(v);
+                  setGenerated(false);
+                }}
+              >
+                <SelectTrigger
+                  className="w-28 h-9"
+                  data-ocid="wa_report.monthly_year.select"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {years.map((y) => (
+                    <SelectItem key={y} value={y}>
+                      {y}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {period === "between" && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <Label>From</Label>
+              <Input
+                type="date"
+                value={fromDate}
+                onChange={(e) => {
+                  setFromDate(e.target.value);
+                  setGenerated(false);
+                }}
+                className="w-44 h-9"
+                data-ocid="wa_report.from_date.input"
+              />
+              <Label>To</Label>
+              <Input
+                type="date"
+                value={toDate}
+                onChange={(e) => {
+                  setToDate(e.target.value);
+                  setGenerated(false);
+                }}
+                className="w-44 h-9"
+                data-ocid="wa_report.to_date.input"
+              />
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <Button
+              data-ocid="wa_report.generate.button"
+              onClick={generateReport}
+              disabled={loadingBills}
+              className="gap-2"
+            >
+              {loadingBills ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <BarChart2 className="h-4 w-4" />
+              )}
+              Generate Report
+            </Button>
+            {generated && (
+              <>
+                <Button
+                  variant="outline"
+                  data-ocid="wa_report.whatsapp.button"
+                  onClick={sendViaWhatsApp}
+                  className="gap-2 border-green-500/40 text-green-400 hover:bg-green-500/10"
+                >
+                  <Send className="h-4 w-4" />
+                  Send via WhatsApp
+                </Button>
+                <Button
+                  variant="outline"
+                  data-ocid="wa_report.print.button"
+                  onClick={() => window.print()}
+                  className="gap-2"
+                >
+                  <Printer className="h-4 w-4" />
+                  Print Report
+                </Button>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Report sections */}
+      {generated &&
+        salesSummary &&
+        receiptSummary &&
+        expenseSummary &&
+        purchaseSummary && (
+          <div className="space-y-4">
+            {/* Sale Report */}
+            <Card data-ocid="wa_report.sale_report.card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">💰 Sale Report</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <div className="p-3 bg-muted rounded-lg">
+                    <p className="text-xs text-muted-foreground">Total Sales</p>
+                    <p className="font-bold text-primary">
+                      {currency}
+                      {salesSummary.totalSales.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-muted rounded-lg">
+                    <p className="text-xs text-muted-foreground">Total Bills</p>
+                    <p className="font-bold">{salesSummary.totalBills}</p>
+                  </div>
+                  <div className="p-3 bg-muted rounded-lg">
+                    <p className="text-xs text-muted-foreground">
+                      Avg Bill Value
+                    </p>
+                    <p className="font-bold">
+                      {currency}
+                      {salesSummary.avgBill.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                    <p className="text-xs text-muted-foreground">Cash</p>
+                    <p className="font-semibold text-green-400">
+                      {currency}
+                      {salesSummary.cash.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                    <p className="text-xs text-muted-foreground">Card</p>
+                    <p className="font-semibold text-blue-400">
+                      {currency}
+                      {salesSummary.card.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-purple-500/10 rounded-lg border border-purple-500/20">
+                    <p className="text-xs text-muted-foreground">UPI</p>
+                    <p className="font-semibold text-purple-400">
+                      {currency}
+                      {salesSummary.upi.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                    <p className="text-xs text-muted-foreground">Split</p>
+                    <p className="font-semibold text-orange-400">
+                      {currency}
+                      {salesSummary.split.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Receipt Report */}
+            <Card data-ocid="wa_report.receipt_report.card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">🧾 Receipt Report</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Total Receipts Collected:{" "}
+                  <span className="font-bold text-foreground">
+                    {currency}
+                    {receiptSummary.total.toFixed(2)}
+                  </span>
+                </p>
+                {receiptSummary.items.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Bill No.</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Mode</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {receiptSummary.items.slice(0, 20).map((item, i) => (
+                          <TableRow key={`receipt-${item.billNo}-${i}`}>
+                            <TableCell className="font-mono text-sm">
+                              {item.billNo}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {item.date}
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              {currency}
+                              {item.amount.toFixed(2)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="outline"
+                                className="capitalize text-xs"
+                              >
+                                {item.mode}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {receiptSummary.items.length > 20 && (
+                      <p className="text-xs text-muted-foreground mt-2 text-center">
+                        Showing 20 of {receiptSummary.items.length} receipts
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No receipts in this period.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Expense Report */}
+            <Card data-ocid="wa_report.expense_report.card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">💸 Expense Report</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Total Expenses:{" "}
+                  <span className="font-bold text-red-400">
+                    {currency}
+                    {expenseSummary.total.toFixed(2)}
+                  </span>
+                </p>
+                {Object.keys(expenseSummary.byCategory).length > 0 ? (
+                  <div className="space-y-2">
+                    {Object.entries(expenseSummary.byCategory).map(
+                      ([cat, amt]) => (
+                        <div
+                          key={cat}
+                          className="flex items-center justify-between p-2.5 bg-muted rounded-lg"
+                        >
+                          <span className="text-sm">{cat}</span>
+                          <span className="font-semibold text-red-400">
+                            {currency}
+                            {Number(amt).toFixed(2)}
+                          </span>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No expenses in this period.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Purchase Report */}
+            <Card data-ocid="wa_report.purchase_report.card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">🛋️ Purchase Report</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Total Purchases:{" "}
+                  <span className="font-bold text-orange-400">
+                    {currency}
+                    {purchaseSummary.total.toFixed(2)}
+                  </span>
+                </p>
+                {Object.keys(purchaseSummary.byVendor).length > 0 ? (
+                  <div className="space-y-2">
+                    {Object.entries(purchaseSummary.byVendor).map(
+                      ([vendor, amt]) => (
+                        <div
+                          key={vendor}
+                          className="flex items-center justify-between p-2.5 bg-muted rounded-lg"
+                        >
+                          <span className="text-sm">{vendor}</span>
+                          <span className="font-semibold text-orange-400">
+                            {currency}
+                            {Number(amt).toFixed(2)}
+                          </span>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No purchases in this period.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Cash Handover / Reconciliation */}
+            <Card data-ocid="wa_report.reconciliation.card">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">
+                  💵 Cash Handover / Reconciliation
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {reconciliationData && reconciliationData.length > 0 ? (
+                  period === "daily" || reconciliationData.length === 1 ? (
+                    (() => {
+                      const r = reconciliationData[0];
+                      const variance =
+                        r.cashVariance !== undefined
+                          ? Number(r.cashVariance)
+                          : null;
+                      const varColor =
+                        variance === null
+                          ? ""
+                          : variance === 0
+                            ? "text-green-400"
+                            : variance < 0
+                              ? "text-red-400"
+                              : "text-amber-400";
+                      const varLabel =
+                        variance === null
+                          ? "-"
+                          : variance === 0
+                            ? "BALANCED"
+                            : variance < 0
+                              ? `SHORT ${currency}${Math.abs(variance).toFixed(2)}`
+                              : `OVER ${currency}${variance.toFixed(2)}`;
+                      return (
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                          {r.openingFloat !== undefined && (
+                            <div className="p-3 bg-muted rounded-lg">
+                              <p className="text-xs text-muted-foreground">
+                                Opening Float
+                              </p>
+                              <p className="font-semibold">
+                                {currency}
+                                {Number(r.openingFloat).toFixed(2)}
+                              </p>
+                            </div>
+                          )}
+                          {r.expectedCash !== undefined && (
+                            <div className="p-3 bg-muted rounded-lg">
+                              <p className="text-xs text-muted-foreground">
+                                Expected Cash
+                              </p>
+                              <p className="font-semibold">
+                                {currency}
+                                {Number(r.expectedCash).toFixed(2)}
+                              </p>
+                            </div>
+                          )}
+                          {r.cashHandover !== undefined && (
+                            <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                              <p className="text-xs text-muted-foreground">
+                                Actual Handover
+                              </p>
+                              <p className="font-semibold text-blue-400">
+                                {currency}
+                                {Number(r.cashHandover).toFixed(2)}
+                              </p>
+                            </div>
+                          )}
+                          {variance !== null && (
+                            <div
+                              className={`p-3 rounded-lg border ${variance === 0 ? "bg-green-500/10 border-green-500/20" : variance < 0 ? "bg-red-500/10 border-red-500/20" : "bg-amber-500/10 border-amber-500/20"}`}
+                            >
+                              <p className="text-xs text-muted-foreground">
+                                Variance
+                              </p>
+                              <p className={`font-bold ${varColor}`}>
+                                {varLabel}
+                              </p>
+                            </div>
+                          )}
+                          {r.closingStaff && (
+                            <div className="p-3 bg-muted rounded-lg">
+                              <p className="text-xs text-muted-foreground">
+                                Closing Staff
+                              </p>
+                              <p className="font-semibold">{r.closingStaff}</p>
+                            </div>
+                          )}
+                          {r.shiftRemarks && (
+                            <div className="p-3 bg-muted rounded-lg col-span-2 md:col-span-3">
+                              <p className="text-xs text-muted-foreground">
+                                Shift Remarks
+                              </p>
+                              <p className="text-sm">{r.shiftRemarks}</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Opening Float</TableHead>
+                            <TableHead>Expected Cash</TableHead>
+                            <TableHead>Actual Handover</TableHead>
+                            <TableHead>Variance</TableHead>
+                            <TableHead>Closing Staff</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {reconciliationData.map((r: any, _i: number) => {
+                            const v =
+                              r.cashVariance !== undefined
+                                ? Number(r.cashVariance)
+                                : null;
+                            const varColor =
+                              v === null
+                                ? ""
+                                : v === 0
+                                  ? "text-green-400"
+                                  : v < 0
+                                    ? "text-red-400"
+                                    : "text-amber-400";
+                            const varLabel =
+                              v === null
+                                ? "-"
+                                : v === 0
+                                  ? "BALANCED"
+                                  : v < 0
+                                    ? `SHORT ${currency}${Math.abs(v).toFixed(2)}`
+                                    : `OVER ${currency}${v.toFixed(2)}`;
+                            return (
+                              <TableRow key={`recon-${r.date}`}>
+                                <TableCell className="font-mono text-sm">
+                                  {r.date}
+                                </TableCell>
+                                <TableCell>
+                                  {r.openingFloat !== undefined
+                                    ? `${currency}${Number(r.openingFloat).toFixed(2)}`
+                                    : "-"}
+                                </TableCell>
+                                <TableCell>
+                                  {r.expectedCash !== undefined
+                                    ? `${currency}${Number(r.expectedCash).toFixed(2)}`
+                                    : "-"}
+                                </TableCell>
+                                <TableCell className="font-medium text-blue-400">
+                                  {r.cashHandover !== undefined
+                                    ? `${currency}${Number(r.cashHandover).toFixed(2)}`
+                                    : "-"}
+                                </TableCell>
+                                <TableCell
+                                  className={`font-semibold ${varColor}`}
+                                >
+                                  {varLabel}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground">
+                                  {r.closingStaff || "-"}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">
+                    No night audit recorded for this period.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+      {loadingBills && !generated && (
+        <div
+          data-ocid="wa_report.loading_state"
+          className="flex items-center gap-3 text-muted-foreground py-8 justify-center"
+        >
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Loading billing data...
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Main Component ----
+
 export default function WhatsAppIntegration() {
   const [templates, setTemplates] = useState<Template[]>(INITIAL_TEMPLATES);
   const [logs] = useState<MessageLog[]>(INITIAL_LOGS);
@@ -244,9 +1163,21 @@ export default function WhatsAppIntegration() {
 
       <Tabs defaultValue="setup">
         <TabsList>
-          <TabsTrigger value="setup">Setup</TabsTrigger>
-          <TabsTrigger value="templates">Templates</TabsTrigger>
-          <TabsTrigger value="log">Message Log</TabsTrigger>
+          <TabsTrigger value="setup" data-ocid="whatsapp.setup.tab">
+            Setup
+          </TabsTrigger>
+          <TabsTrigger value="templates" data-ocid="whatsapp.templates.tab">
+            Templates
+          </TabsTrigger>
+          <TabsTrigger value="log" data-ocid="whatsapp.log.tab">
+            Message Log
+          </TabsTrigger>
+          <TabsTrigger
+            value="summary-report"
+            data-ocid="whatsapp.summary_report.tab"
+          >
+            Summary Report
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="setup" className="mt-4 space-y-6">
@@ -286,7 +1217,7 @@ export default function WhatsAppIntegration() {
                   <Label>WhatsApp Business API Key</Label>
                   <Input
                     type="password"
-                    placeholder="••••••••"
+                    placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
                     value={settings.apiKey}
                     onChange={(e) =>
                       setSettings((p) => ({ ...p, apiKey: e.target.value }))
@@ -521,6 +1452,10 @@ export default function WhatsAppIntegration() {
               </Table>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="summary-report" className="mt-4">
+          <SummaryReport />
         </TabsContent>
       </Tabs>
     </div>

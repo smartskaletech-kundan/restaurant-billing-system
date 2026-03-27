@@ -120,6 +120,9 @@ export function Purchases() {
     paymentStatus: "Pending",
   });
   const [lineItems, setLineItems] = useState<PurchaseItem[]>([newLine()]);
+  // Discount state for Add Purchase dialog
+  const [discountType, setDiscountType] = useState<"flat" | "percent">("flat");
+  const [discountInput, setDiscountInput] = useState(0);
 
   useEffect(() => {
     setPurchases(loadPurchases());
@@ -137,6 +140,8 @@ export function Purchases() {
 
   const handleOpenDialog = () => {
     setVendors(loadVendors());
+    setDiscountType("flat");
+    setDiscountInput(0);
     setDialogOpen(true);
   };
 
@@ -159,6 +164,11 @@ export function Purchases() {
 
   const totalAmount = lineItems.reduce((s, it) => s + it.subtotal, 0);
   const totalGST = lineItems.reduce((s, it) => s + it.gstAmount, 0);
+  const discountAmount =
+    discountType === "percent"
+      ? (totalAmount * discountInput) / 100
+      : discountInput;
+  const netAmount = totalAmount - discountAmount;
 
   function handleAdd() {
     if (!form.vendorId || form.vendorId === "_") {
@@ -169,16 +179,20 @@ export function Purchases() {
       toast.error("All line items need a name");
       return;
     }
+    const discountNote =
+      discountAmount > 0
+        ? `Discount: ${discountType === "percent" ? `${discountInput}%` : `₹${discountInput}`} (₹${discountAmount.toFixed(2)}) | `
+        : "";
     const newP: Purchase = {
       id: Date.now().toString(),
       vendorId: form.vendorId,
       vendorName: form.vendorName,
       items: lineItems.map(({ lineId: _l, ...rest }) => rest),
-      totalAmount,
+      totalAmount: netAmount,
       totalGST,
       date: Date.now(),
       paymentStatus: form.paymentStatus,
-      notes: form.notes,
+      notes: discountNote + form.notes,
     };
     const updated = [newP, ...purchases];
     setPurchases(updated);
@@ -191,6 +205,7 @@ export function Purchases() {
       paymentStatus: "Pending",
     });
     setLineItems([newLine()]);
+    setDiscountInput(0);
     toast.success("Purchase added");
   }
 
@@ -260,7 +275,7 @@ export function Purchases() {
             }}
             data-ocid="purchases.clear_date_button"
           >
-            00d7 Clear
+            ✕ Clear
           </Button>
         )}
       </div>
@@ -275,9 +290,7 @@ export function Purchases() {
             </p>
           </div>
           <div className="bg-card border border-border rounded-xl p-4 shadow-sm">
-            <p className="text-xs text-muted-foreground">
-              Total Amount (incl. GST)
-            </p>
+            <p className="text-xs text-muted-foreground">Total Amount</p>
             <p className="text-xl font-bold text-foreground mt-1">
               ₹{purchases.reduce((s, p) => s + p.totalAmount, 0).toFixed(2)}
             </p>
@@ -291,60 +304,58 @@ export function Purchases() {
         </div>
       )}
 
-      <div
-        className="bg-card border border-border rounded-xl overflow-hidden shadow-card"
-        data-ocid="purchases.table"
-      >
+      {/* Purchases Table */}
+      <div>
         {filteredPurchases.length === 0 ? (
           <div
-            className="text-center py-16 text-muted-foreground"
+            className="bg-card border border-border rounded-xl text-center py-16"
             data-ocid="purchases.empty_state"
           >
-            <ShoppingCart className="mx-auto mb-3 h-10 w-10 opacity-30" />
-            <p>No purchases recorded yet.</p>
+            <ShoppingCart className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+            <p className="text-muted-foreground">No purchases yet</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="bg-card border border-border rounded-xl overflow-x-auto">
+            <table className="w-full text-sm" data-ocid="purchases.table">
               <thead>
                 <tr className="border-b border-border">
-                  {[
-                    "ID",
-                    "Vendor",
-                    "Base Amount",
-                    "GST",
-                    "Total (₹)",
-                    "Date",
-                    "Payment Status",
-                    "Notes",
-                    "Actions",
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      className="px-4 py-3 text-left text-muted-foreground font-medium"
-                    >
-                      {h}
-                    </th>
-                  ))}
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    Vendor
+                  </th>
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    Items
+                  </th>
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    GST
+                  </th>
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    Net Amount
+                  </th>
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    Date
+                  </th>
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-muted-foreground font-medium">
+                    Notes
+                  </th>
+                  <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody>
                 {filteredPurchases.map((p, i) => {
-                  const base = p.totalAmount - (p.totalGST ?? 0);
                   return (
                     <tr
                       key={p.id}
-                      data-ocid={`purchases.item.${i + 1}`}
-                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                      data-ocid={`purchases.row.${i + 1}`}
+                      className="border-b border-border last:border-0 hover:bg-muted/30"
                     >
-                      <td className="px-4 py-3 text-muted-foreground font-mono text-xs">
-                        {p.id.slice(-6)}
-                      </td>
                       <td className="px-4 py-3 font-medium text-foreground">
                         {p.vendorName}
                       </td>
-                      <td className="px-4 py-3 text-foreground">
-                        ₹{base.toFixed(2)}
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {p.items.length} item(s)
                       </td>
                       <td className="px-4 py-3 text-primary font-medium">
                         ₹{(p.totalGST ?? 0).toFixed(2)}
@@ -548,7 +559,6 @@ export function Purchases() {
                           <Input
                             type="number"
                             min="0"
-                            step="0.01"
                             value={item.unitPrice}
                             onChange={(e) =>
                               updateLine(
@@ -606,15 +616,79 @@ export function Purchases() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex justify-end gap-6 text-sm">
+
+              {/* Discount row */}
+              <div className="flex items-center gap-3 pt-1">
+                <span className="text-sm font-medium text-muted-foreground min-w-[80px]">
+                  Discount:
+                </span>
+                <div className="flex rounded-lg border border-border overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setDiscountType("flat")}
+                    className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                      discountType === "flat"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    Flat (₹)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDiscountType("percent")}
+                    className={`px-2.5 py-1 text-xs font-medium border-l border-border transition-colors ${
+                      discountType === "percent"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    %
+                  </button>
+                </div>
+                <div className="relative w-28">
+                  <Input
+                    data-ocid="purchases.discount_input"
+                    type="number"
+                    min="0"
+                    max={discountType === "percent" ? 100 : undefined}
+                    value={discountInput}
+                    onChange={(e) =>
+                      setDiscountInput(Number.parseFloat(e.target.value) || 0)
+                    }
+                    className="h-9 pr-7 text-sm"
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                    {discountType === "percent" ? "%" : "₹"}
+                  </span>
+                </div>
+                {discountAmount > 0 && (
+                  <span className="text-xs text-green-600 font-medium">
+                    = ₹{discountAmount.toFixed(2)} off
+                  </span>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-6 text-sm border-t border-border pt-2">
                 <span className="text-muted-foreground">
                   Total GST:{" "}
                   <span className="text-primary font-semibold">
                     ₹{totalGST.toFixed(2)}
                   </span>
                 </span>
+                {discountAmount > 0 && (
+                  <span className="text-muted-foreground">
+                    Gross Total:{" "}
+                    <span className="line-through">
+                      ₹{totalAmount.toFixed(2)}
+                    </span>{" "}
+                    <span className="text-destructive text-xs">
+                      -₹{discountAmount.toFixed(2)}
+                    </span>
+                  </span>
+                )}
                 <span className="font-semibold">
-                  Grand Total: ₹{totalAmount.toFixed(2)}
+                  Net Total: ₹{netAmount.toFixed(2)}
                 </span>
               </div>
             </div>

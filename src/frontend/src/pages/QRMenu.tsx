@@ -13,58 +13,35 @@ import {
   Copy,
   Printer,
   QrCode,
+  RefreshCw,
   ScanLine,
   ShoppingBag,
   TrendingUp,
   Users,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import type { Order } from "../backend";
+import { useActor } from "../hooks/useActor";
 
 const TABLES = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"];
-const INITIAL_TABLE_STATUS: Record<string, "Available" | "Occupied"> = {
-  T1: "Occupied",
-  T2: "Available",
-  T3: "Occupied",
-  T4: "Available",
-  T5: "Available",
-  T6: "Occupied",
-  T7: "Available",
-  T8: "Occupied",
-};
 
 type OrderStatus = "New" | "Accepted" | "Preparing" | "Ready";
-interface Order {
+interface DisplayOrder {
   id: string;
+  rawId: string;
   table: string;
   items: string;
   amount: number;
   status: OrderStatus;
 }
 
-const INITIAL_ORDERS: Order[] = [
-  {
-    id: "ORD-001",
-    table: "T1",
-    items: "Butter Chicken x2, Naan x4",
-    amount: 680,
-    status: "New",
-  },
-  {
-    id: "ORD-002",
-    table: "T3",
-    items: "Paneer Tikka x1, Dal Makhani x1",
-    amount: 420,
-    status: "Accepted",
-  },
-  {
-    id: "ORD-003",
-    table: "T6",
-    items: "Biryani x2, Raita x2",
-    amount: 560,
-    status: "Preparing",
-  },
-];
+function mapStatus(backendStatus: string): OrderStatus {
+  if (backendStatus === "kotSent") return "New";
+  if (backendStatus === "inProgress") return "Accepted";
+  if (backendStatus === "ready") return "Ready";
+  return "Preparing";
+}
 
 function QRPattern({ table }: { table: string }) {
   const seed = table.charCodeAt(table.length - 1);
@@ -92,23 +69,88 @@ function QRPattern({ table }: { table: string }) {
 }
 
 export default function QRMenu() {
+  const { actor, isFetching } = useActor();
   const [selectedTable, setSelectedTable] = useState("T1");
-  const [tableStatus] = useState(INITIAL_TABLE_STATUS);
-  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
+  const [orders, setOrders] = useState<DisplayOrder[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [updating, setUpdating] = useState<string | null>(null);
 
   const tableUrl = `https://menu.smartskale.com/table/${selectedTable}`;
 
-  function handleAccept(id: string) {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, status: "Accepted" } : o)),
-    );
-    toast.success("Order accepted");
+  const load = useCallback(async () => {
+    if (!actor) return;
+    try {
+      const all: Order[] = await actor.getOrders();
+      const active = all.filter((o) =>
+        ["kotSent", "inProgress", "ready"].includes(o.status),
+      );
+      const display: DisplayOrder[] = active.map((o) => ({
+        id: `ORD-${o.id.slice(-6)}`,
+        rawId: o.id,
+        table: o.tableName,
+        items: o.items
+          .map((item) => `${item.name} x${Number(item.quantity)}`)
+          .join(", "),
+        amount: o.items.reduce(
+          (sum, item) => sum + item.price * Number(item.quantity),
+          0,
+        ),
+        status: mapStatus(o.status),
+      }));
+      setOrders(display);
+      setLastRefreshed(new Date());
+    } catch (err) {
+      console.error("QRMenu load error:", err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [actor]);
+
+  useEffect(() => {
+    if (!actor || isFetching) return;
+    load();
+    const interval = setInterval(load, 3000);
+    return () => clearInterval(interval);
+  }, [actor, isFetching, load]);
+
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    await load();
+  };
+
+  async function handleAccept(rawId: string) {
+    if (!actor) return;
+    setUpdating(rawId);
+    try {
+      const result = await actor.updateOrderStatus(rawId, "inProgress");
+      if (!result) throw new Error("Order not found");
+      toast.success("Order accepted");
+      await load();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to accept order");
+    } finally {
+      setUpdating(null);
+    }
   }
-  function handleReady(id: string) {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, status: "Ready" } : o)),
-    );
-    toast.success("Order marked as ready");
+
+  async function handleReady(rawId: string) {
+    if (!actor) return;
+    setUpdating(rawId);
+    try {
+      const result = await actor.updateOrderStatus(rawId, "ready");
+      if (!result) throw new Error("Order not found");
+      toast.success("Order marked as ready");
+      await load();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to mark order ready");
+    } finally {
+      setUpdating(null);
+    }
   }
 
   function handleCopyLink() {
@@ -117,7 +159,6 @@ export default function QRMenu() {
         toast.success("Link copied to clipboard!");
       });
     } else {
-      // Fallback for browsers without clipboard API
       const el = document.createElement("input");
       el.value = tableUrl;
       document.body.appendChild(el);
@@ -128,6 +169,13 @@ export default function QRMenu() {
     }
   }
 
+  // Compute table occupancy from live orders
+  const occupiedTables = new Set(orders.map((o) => o.table));
+  const tableStatus: Record<string, "Available" | "Occupied"> = {};
+  for (const t of TABLES) {
+    tableStatus[t] = occupiedTables.has(t) ? "Occupied" : "Available";
+  }
+
   const statusColor: Record<OrderStatus, string> = {
     New: "bg-blue-500/20 text-blue-400",
     Accepted: "bg-yellow-500/20 text-yellow-400",
@@ -135,18 +183,35 @@ export default function QRMenu() {
     Ready: "bg-green-500/20 text-green-400",
   };
 
+  if (loading) {
+    return (
+      <div
+        className="flex items-center justify-center h-64"
+        data-ocid="qr.loading_state"
+      >
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 p-6">
-      <h1 className="text-2xl font-bold text-foreground">
-        QR Menu &amp; Orders
-      </h1>
+      <div>
+        <h1 className="text-2xl font-bold text-foreground">
+          QR Menu &amp; Orders
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Last refreshed: {lastRefreshed.toLocaleTimeString()} · Auto-refreshes
+          every 3s
+        </p>
+      </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           {
             label: "Active Tables",
-            value: "3",
+            value: occupiedTables.size.toString(),
             icon: Users,
             color: "text-blue-400",
           },
@@ -252,64 +317,104 @@ export default function QRMenu() {
 
       {/* Incoming Orders */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle>Incoming Orders</CardTitle>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-ocid="qr.refresh.button"
+            onClick={handleManualRefresh}
+            disabled={refreshing}
+          >
+            <RefreshCw
+              className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`}
+            />
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </Button>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Order#</TableHead>
-                <TableHead>Table</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {orders.map((o) => (
-                <TableRow key={o.id}>
-                  <TableCell className="font-medium">{o.id}</TableCell>
-                  <TableCell>{o.table}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {o.items}
-                  </TableCell>
-                  <TableCell>₹{o.amount}</TableCell>
-                  <TableCell>
-                    <Badge className={statusColor[o.status]}>{o.status}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
-                      {o.status === "New" && (
-                        <Button
-                          size="sm"
-                          className="bg-green-600 hover:bg-green-700"
-                          onClick={() => handleAccept(o.id)}
-                        >
-                          Accept
-                        </Button>
-                      )}
-                      {o.status === "Accepted" && (
-                        <Button
-                          size="sm"
-                          className="bg-orange-500 hover:bg-orange-600"
-                          onClick={() => handleReady(o.id)}
-                        >
-                          Mark Ready
-                        </Button>
-                      )}
-                      {(o.status === "Preparing" || o.status === "Ready") && (
-                        <span className="text-xs text-muted-foreground">
-                          {o.status === "Ready" ? "✓ Ready" : "In Kitchen"}
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
+          {orders.length === 0 ? (
+            <div
+              className="text-center py-12"
+              data-ocid="qr.orders.empty_state"
+            >
+              <p className="text-4xl mb-3">📋</p>
+              <p className="text-foreground font-semibold">No active orders</p>
+              <p className="text-muted-foreground text-sm mt-1">
+                Orders placed via QR menu will appear here automatically.
+              </p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Order#</TableHead>
+                  <TableHead>Table</TableHead>
+                  <TableHead>Items</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {orders.map((o, i) => (
+                  <TableRow key={o.rawId} data-ocid={`qr.orders.item.${i + 1}`}>
+                    <TableCell className="font-medium">{o.id}</TableCell>
+                    <TableCell>{o.table}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {o.items}
+                    </TableCell>
+                    <TableCell>₹{o.amount}</TableCell>
+                    <TableCell>
+                      <Badge className={statusColor[o.status]}>
+                        {o.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        {o.status === "New" && (
+                          <Button
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700"
+                            disabled={updating === o.rawId}
+                            onClick={() => handleAccept(o.rawId)}
+                            data-ocid={`qr.accept.button.${i + 1}`}
+                          >
+                            {updating === o.rawId ? (
+                              <span className="animate-spin">⏳</span>
+                            ) : (
+                              "Accept"
+                            )}
+                          </Button>
+                        )}
+                        {o.status === "Accepted" && (
+                          <Button
+                            size="sm"
+                            className="bg-orange-500 hover:bg-orange-600"
+                            disabled={updating === o.rawId}
+                            onClick={() => handleReady(o.rawId)}
+                            data-ocid={`qr.ready.button.${i + 1}`}
+                          >
+                            {updating === o.rawId ? (
+                              <span className="animate-spin">⏳</span>
+                            ) : (
+                              "Mark Ready"
+                            )}
+                          </Button>
+                        )}
+                        {(o.status === "Preparing" || o.status === "Ready") && (
+                          <span className="text-xs text-muted-foreground">
+                            {o.status === "Ready" ? "✓ Ready" : "In Kitchen"}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

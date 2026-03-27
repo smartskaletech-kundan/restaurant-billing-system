@@ -19,6 +19,33 @@ import { formatBillNumber } from "../utils/billFormat";
 
 type SettlementMode = "Cash" | "HDFC Card" | "SBI Card" | "UPI" | "Split";
 
+interface Coupon {
+  id: string;
+  code: string;
+  name: string;
+  discountType: "percent" | "flat";
+  discountValue: number;
+  minOrderAmount: number;
+  maxUses: number;
+  usedCount: number;
+  expiryDate: string;
+  assignedMobile: string;
+  status: "active" | "expired" | "used_up";
+  createdAt: string;
+  fy: string;
+}
+
+interface CouponUsage {
+  id: string;
+  couponId: string;
+  couponCode: string;
+  mobileNumber: string;
+  billId: string;
+  billAmount: number;
+  discountApplied: number;
+  usedAt: string;
+}
+
 interface Props {
   navigateTo: (page: Page) => void;
   selectedTable: SelectedTable | null;
@@ -31,7 +58,14 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
   const { card1Name, card2Name } = useCardNames();
   const [order, setOrder] = useState<Order | null>(null);
   const [settings, setSettings] = useState<RestaurantSettings | null>(null);
-  const [discount, setDiscount] = useState(0);
+  // Discount fields
+  const [discountType, setDiscountType] = useState<"flat" | "percent">("flat");
+  const [discountInput, setDiscountInput] = useState(0);
+  // Coupon fields
+  const [couponCode, setCouponCode] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponError, setCouponError] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
@@ -116,11 +150,9 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
       .then(([oRaw, s]) => {
         let o: Order | null = null;
         if (oRaw != null) {
-          if (Array.isArray(oRaw)) {
+          if (Array.isArray(oRaw))
             o = oRaw.length > 0 ? (oRaw[0] as Order) : null;
-          } else {
-            o = oRaw as Order;
-          }
+          else o = oRaw as Order;
         }
         setOrder(o);
         setSettings(s as RestaurantSettings);
@@ -147,12 +179,62 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
     ? activeOrder.items.reduce((s, i) => s + i.price * Number(i.quantity), 0)
     : 0;
   const taxRate = settings?.taxRate ?? 0;
-  const taxAmount = (subtotal - discount) * (taxRate / 100);
-  const total = subtotal - discount + taxAmount;
+
+  // Manual discount (flat value computed from type + input)
+  const discount =
+    discountType === "percent"
+      ? (subtotal * discountInput) / 100
+      : discountInput;
+
+  // Coupon discount
+  const couponDiscount = appliedCoupon
+    ? appliedCoupon.discountType === "percent"
+      ? (subtotal * appliedCoupon.discountValue) / 100
+      : appliedCoupon.discountValue
+    : 0;
+
+  const totalDiscount = discount + couponDiscount;
+  const taxAmount = (subtotal - totalDiscount) * (taxRate / 100);
+  const total = subtotal - totalDiscount + taxAmount;
 
   // Split total entered
   const splitTotal = splitCash + splitHDFCCard + splitSBICard + splitUPI;
   const splitRemaining = Math.max(0, total - splitTotal);
+
+  function applyCoupon() {
+    const coupons: Coupon[] = JSON.parse(
+      localStorage.getItem(`coupon_list_${restaurantId}`) || "[]",
+    );
+    const now = new Date();
+    const found = coupons.find(
+      (c) => c.code.toLowerCase() === couponCode.trim().toLowerCase(),
+    );
+    if (!found) {
+      setCouponError("Coupon code not found.");
+      return;
+    }
+    if (found.status === "expired" || new Date(found.expiryDate) < now) {
+      setCouponError("Coupon has expired.");
+      return;
+    }
+    if (found.maxUses > 0 && found.usedCount >= found.maxUses) {
+      setCouponError("Coupon has been fully used.");
+      return;
+    }
+    if (subtotal < found.minOrderAmount) {
+      setCouponError(`Minimum order ₹${found.minOrderAmount} required.`);
+      return;
+    }
+    setAppliedCoupon(found);
+    setCouponError("");
+    toast.success(`Coupon "${found.code}" applied!`);
+  }
+
+  function removeCoupon() {
+    setAppliedCoupon(null);
+    setCouponCode("");
+    setCouponError("");
+  }
 
   const handleFinalize = async () => {
     if (!actor || !activeOrder || !effectiveTable) return;
@@ -192,16 +274,49 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
         billItems,
         subtotal,
         taxAmount,
-        discount,
+        totalDiscount,
         total,
         modeString,
         "Admin",
         restaurantId,
       );
+
       await Promise.all([
         actor.updateOrderStatus(activeOrder.id, "billed"),
         actor.updateTableStatus(effectiveTable.id, "available"),
       ]);
+
+      // Record coupon usage
+      if (appliedCoupon) {
+        const coupons: Coupon[] = JSON.parse(
+          localStorage.getItem(`coupon_list_${restaurantId}`) || "[]",
+        );
+        const updatedCoupons = coupons.map((c) =>
+          c.id === appliedCoupon.id ? { ...c, usedCount: c.usedCount + 1 } : c,
+        );
+        localStorage.setItem(
+          `coupon_list_${restaurantId}`,
+          JSON.stringify(updatedCoupons),
+        );
+        const usages: CouponUsage[] = JSON.parse(
+          localStorage.getItem(`coupon_usage_${restaurantId}`) || "[]",
+        );
+        usages.push({
+          id: `usage-${Date.now()}`,
+          couponId: appliedCoupon.id,
+          couponCode: appliedCoupon.code,
+          mobileNumber: "",
+          billId: String(bill.billNumber),
+          billAmount: total,
+          discountApplied: couponDiscount,
+          usedAt: new Date().toISOString(),
+        });
+        localStorage.setItem(
+          `coupon_usage_${restaurantId}`,
+          JSON.stringify(usages),
+        );
+      }
+
       setSavedBillNumber(Number(bill.billNumber));
       toast.success("Bill saved successfully!");
       setShowPrint(true);
@@ -398,19 +513,117 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
         </table>
       </div>
 
-      <div className="bg-card border border-border rounded-xl p-5 shadow-card space-y-3">
-        <div className="flex items-center gap-3">
-          <Label className="w-32 flex-shrink-0">Discount (₹)</Label>
-          <Input
-            data-ocid="billing.discount.input"
-            type="number"
-            value={discount}
-            onChange={(e) =>
-              setDiscount(Number.parseFloat(e.target.value) || 0)
-            }
-            min="0"
-            className="w-32"
-          />
+      <div className="bg-card border border-border rounded-xl p-5 shadow-card space-y-4">
+        {/* Discount Row */}
+        <div className="space-y-2">
+          <Label className="font-medium">Discount</Label>
+          <div className="flex items-center gap-3">
+            {/* Type toggle */}
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setDiscountType("flat")}
+                className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                  discountType === "flat"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Flat (₹)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiscountType("percent")}
+                className={`px-3 py-1.5 text-sm font-medium transition-colors border-l border-border ${
+                  discountType === "percent"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Percent (%)
+              </button>
+            </div>
+            <div className="relative w-32">
+              <Input
+                data-ocid="billing.discount.input"
+                type="number"
+                value={discountInput}
+                onChange={(e) =>
+                  setDiscountInput(Number.parseFloat(e.target.value) || 0)
+                }
+                min="0"
+                max={discountType === "percent" ? 100 : undefined}
+                className="h-9 pr-8"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                {discountType === "percent" ? "%" : "₹"}
+              </span>
+            </div>
+            {discount > 0 && (
+              <span className="text-sm text-green-600 font-medium">
+                = ₹{discount.toFixed(2)} off
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Coupon Redemption Row */}
+        <div className="space-y-2">
+          <Label className="font-medium">Coupon Code</Label>
+          {appliedCoupon ? (
+            <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              <span className="text-green-700 font-semibold text-sm">
+                🎟 {appliedCoupon.code}
+              </span>
+              <span className="text-green-600 text-sm">
+                {appliedCoupon.name} —{" "}
+                {appliedCoupon.discountType === "percent"
+                  ? `${appliedCoupon.discountValue}% off`
+                  : `₹${appliedCoupon.discountValue} off`}{" "}
+                (−₹{couponDiscount.toFixed(2)})
+              </span>
+              <button
+                type="button"
+                onClick={removeCoupon}
+                className="ml-auto text-xs text-red-500 hover:underline"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Input
+                data-ocid="billing.coupon.input"
+                placeholder="Enter coupon code"
+                value={couponCode}
+                onChange={(e) => {
+                  setCouponCode(e.target.value);
+                  setCouponError("");
+                }}
+                className="h-9 flex-1"
+                onKeyDown={(e) => e.key === "Enter" && applyCoupon()}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-ocid="billing.coupon.apply_button"
+                onClick={applyCoupon}
+                disabled={!couponCode.trim()}
+                className="h-9"
+              >
+                Apply
+              </Button>
+            </div>
+          )}
+          {couponError && (
+            <p
+              className="text-xs text-destructive"
+              data-ocid="billing.coupon.error_state"
+            >
+              {couponError}
+            </p>
+          )}
         </div>
 
         {/* Settlement Mode */}
@@ -587,8 +800,21 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
           </div>
           {discount > 0 && (
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Discount</span>
+              <span className="text-muted-foreground">
+                Discount
+                {discountType === "percent" ? ` (${discountInput}%)` : ""}
+              </span>
               <span className="text-destructive">−₹{discount.toFixed(2)}</span>
+            </div>
+          )}
+          {couponDiscount > 0 && appliedCoupon && (
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">
+                Coupon ({appliedCoupon.code})
+              </span>
+              <span className="text-green-600">
+                −₹{couponDiscount.toFixed(2)}
+              </span>
             </div>
           )}
           <div className="flex justify-between text-sm">
@@ -681,8 +907,17 @@ export function Billing({ navigateTo, selectedTable, selectedOrder }: Props) {
               </div>
               {discount > 0 && (
                 <div className="flex justify-between">
-                  <span>Discount</span>
+                  <span>
+                    Discount
+                    {discountType === "percent" ? ` (${discountInput}%)` : ""}
+                  </span>
                   <span>-₹{discount.toFixed(2)}</span>
+                </div>
+              )}
+              {couponDiscount > 0 && appliedCoupon && (
+                <div className="flex justify-between">
+                  <span>Coupon ({appliedCoupon.code})</span>
+                  <span>-₹{couponDiscount.toFixed(2)}</span>
                 </div>
               )}
               <div className="flex justify-between">

@@ -2,8 +2,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Lock } from "lucide-react";
+import { Info, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { RestaurantSettings } from "../backend";
@@ -19,6 +27,24 @@ const DEFAULT_SETTINGS: RestaurantSettings = {
   footerMessage: "Thank you for dining with us! Visit again.",
 };
 
+interface SmsConfig {
+  provider: string;
+  apiKey: string;
+  accountSid: string;
+  senderId: string;
+  templateId: string;
+  enabled: boolean;
+}
+
+const DEFAULT_SMS_CONFIG: SmsConfig = {
+  provider: "msg91",
+  apiKey: "",
+  accountSid: "",
+  senderId: "",
+  templateId: "",
+  enabled: false,
+};
+
 export function Settings() {
   const { actor, isFetching } = useActor();
   const { restaurantId, ownerName } = useRestaurant();
@@ -26,9 +52,14 @@ export function Settings() {
   const [gstNumber, setGstNumber] = useState("");
   const [card1Name, setCard1Name] = useState("HDFC Card");
   const [card2Name, setCard2Name] = useState("SBI Card");
+  const [ownerWhatsAppNumber, setOwnerWhatsAppNumber] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // SMS Gateway
+  const [smsConfig, setSmsConfig] = useState<SmsConfig>(DEFAULT_SMS_CONFIG);
+  const [smsSaving, setSmsSaving] = useState(false);
 
   const gstinKey = restaurantId
     ? `${restaurantId}_restaurant_gstin`
@@ -42,10 +73,13 @@ export function Settings() {
       setGstNumber(localStorage.getItem(gstinKey) || "");
       setCard1Name(localStorage.getItem(card1Key) || "HDFC Card");
       setCard2Name(localStorage.getItem(card2Key) || "SBI Card");
+      setOwnerWhatsAppNumber(
+        localStorage.getItem(`${restaurantId}_owner_whatsapp_number`) || "",
+      );
     } catch {
       // ignore
     }
-  }, [gstinKey, card1Key, card2Key]);
+  }, [gstinKey, card1Key, card2Key, restaurantId]);
 
   // Load settings: try backend first, fall back to localStorage
   useEffect(() => {
@@ -80,13 +114,14 @@ export function Settings() {
     }
 
     setLoading(true);
-    actor
-      .getSettings()
-      .then((s) => {
-        if (s.name) setForm(s);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    Promise.all([
+      actor.getSettings().catch(() => null),
+      (actor as any).getSmsConfig().catch(() => null),
+    ]).then(([s, sms]) => {
+      if (s?.name) setForm(s);
+      if (sms) setSmsConfig(sms);
+      setLoading(false);
+    });
   }, [actor, isFetching, restaurantId]);
 
   const handleSave = async () => {
@@ -113,6 +148,10 @@ export function Settings() {
       localStorage.setItem(gstinKey, gstNumber);
       localStorage.setItem(card1Key, card1Name || "HDFC Card");
       localStorage.setItem(card2Key, card2Name || "SBI Card");
+      localStorage.setItem(
+        `${restaurantId}_owner_whatsapp_number`,
+        ownerWhatsAppNumber,
+      );
 
       // Show success immediately
       setSaveSuccess(true);
@@ -133,8 +172,28 @@ export function Settings() {
     }
   };
 
+  const handleSaveSmsConfig = async () => {
+    if (!actor) {
+      toast.error("Not connected to backend");
+      return;
+    }
+    setSmsSaving(true);
+    try {
+      await (actor as any).updateSmsConfig(smsConfig);
+      toast.success("SMS/WhatsApp gateway settings saved!");
+    } catch (err) {
+      console.error("SMS config save error:", err);
+      toast.error("Failed to save gateway settings");
+    } finally {
+      setSmsSaving(false);
+    }
+  };
+
   const update = (key: keyof RestaurantSettings, value: string | number) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  const updateSms = (key: keyof SmsConfig, value: string | boolean) =>
+    setSmsConfig((s) => ({ ...s, [key]: value }));
 
   if (loading) {
     return (
@@ -222,6 +281,19 @@ export function Settings() {
             onChange={(e) => update("phone", e.target.value)}
             placeholder="+91 XXXXX XXXXX"
           />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Owner WhatsApp Number</Label>
+          <Input
+            data-ocid="settings.owner_whatsapp.input"
+            value={ownerWhatsAppNumber}
+            onChange={(e) => setOwnerWhatsAppNumber(e.target.value)}
+            placeholder="+91 XXXXX XXXXX"
+          />
+          <p className="text-xs text-muted-foreground">
+            Pre-filled when sending WhatsApp summary reports to the owner
+          </p>
         </div>
       </div>
 
@@ -325,6 +397,162 @@ export function Settings() {
       >
         {saving ? "Saving..." : "💾 Save Settings"}
       </Button>
+
+      {/* SMS / WhatsApp Gateway */}
+      <div className="bg-card border border-border rounded-xl p-6 shadow-card space-y-5">
+        <h3 className="font-semibold text-foreground border-b border-border pb-3">
+          📲 SMS / WhatsApp Gateway
+        </h3>
+
+        {/* Info box */}
+        <div className="flex gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg text-sm">
+          <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+          <div className="space-y-1 text-muted-foreground">
+            <p className="font-medium text-foreground">
+              How to get your API key:
+            </p>
+            <p>
+              • <span className="font-medium">MSG91</span>: Register at{" "}
+              <span className="font-mono text-xs">msg91.com</span>, get your
+              Auth Key, and register a DLT template.
+            </p>
+            <p>
+              • <span className="font-medium">Fast2SMS</span>: Sign up at{" "}
+              <span className="font-mono text-xs">fast2sms.com</span> and copy
+              your Authorization key.
+            </p>
+            <p>
+              • <span className="font-medium">Twilio</span>: Get your Account
+              SID + Auth Token from{" "}
+              <span className="font-mono text-xs">console.twilio.com</span>.
+            </p>
+          </div>
+        </div>
+
+        {/* Enable toggle */}
+        <div className="flex items-center justify-between">
+          <div>
+            <Label className="text-base">Enable SMS/WhatsApp Gateway</Label>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Send OTP and notifications to customers via SMS/WhatsApp
+            </p>
+          </div>
+          <Switch
+            data-ocid="settings.sms_gateway.switch"
+            checked={smsConfig.enabled}
+            onCheckedChange={(v) => updateSms("enabled", v)}
+          />
+        </div>
+
+        {/* Provider */}
+        <div className="space-y-1.5">
+          <Label>Provider</Label>
+          <Select
+            value={smsConfig.provider}
+            onValueChange={(v) => updateSms("provider", v)}
+          >
+            <SelectTrigger
+              data-ocid="settings.sms_provider.select"
+              className="h-9"
+            >
+              <SelectValue placeholder="Select provider" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="msg91">MSG91</SelectItem>
+              <SelectItem value="fast2sms">Fast2SMS</SelectItem>
+              <SelectItem value="twilio">Twilio</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* API Key */}
+        <div className="space-y-1.5">
+          <Label>
+            {smsConfig.provider === "twilio"
+              ? "Auth Token"
+              : smsConfig.provider === "fast2sms"
+                ? "Authorization Key"
+                : "Auth Key"}
+          </Label>
+          <Input
+            data-ocid="settings.sms_apikey.input"
+            type="password"
+            className="h-9 font-mono"
+            value={smsConfig.apiKey}
+            onChange={(e) => updateSms("apiKey", e.target.value)}
+            placeholder={
+              smsConfig.provider === "twilio"
+                ? "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                : "Enter API key"
+            }
+          />
+        </div>
+
+        {/* Account SID — Twilio only */}
+        {smsConfig.provider === "twilio" && (
+          <div className="space-y-1.5">
+            <Label>Account SID</Label>
+            <Input
+              data-ocid="settings.sms_account_sid.input"
+              className="h-9 font-mono"
+              value={smsConfig.accountSid}
+              onChange={(e) => updateSms("accountSid", e.target.value)}
+              placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            />
+          </div>
+        )}
+
+        {/* Sender ID */}
+        <div className="space-y-1.5">
+          <Label>
+            {smsConfig.provider === "twilio" ? "From Number" : "Sender ID"}
+          </Label>
+          <Input
+            data-ocid="settings.sms_sender.input"
+            className="h-9"
+            value={smsConfig.senderId}
+            onChange={(e) => updateSms("senderId", e.target.value)}
+            placeholder={
+              smsConfig.provider === "twilio"
+                ? "+1XXXXXXXXXX"
+                : smsConfig.provider === "fast2sms"
+                  ? "RESTAL"
+                  : "RESTAL"
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            {smsConfig.provider === "twilio"
+              ? "Your Twilio phone number in E.164 format"
+              : "6-character Sender ID approved in your DLT registration"}
+          </p>
+        </div>
+
+        {/* DLT Template ID — not required for Twilio */}
+        {smsConfig.provider !== "twilio" && (
+          <div className="space-y-1.5">
+            <Label>DLT Template ID</Label>
+            <Input
+              data-ocid="settings.sms_template.input"
+              className="h-9 font-mono"
+              value={smsConfig.templateId}
+              onChange={(e) => updateSms("templateId", e.target.value)}
+              placeholder="1234567890123456789"
+            />
+            <p className="text-xs text-muted-foreground">
+              Required by TRAI/DLT regulations for Indian SMS delivery
+            </p>
+          </div>
+        )}
+
+        <Button
+          data-ocid="settings.sms_gateway.save_button"
+          onClick={handleSaveSmsConfig}
+          disabled={smsSaving}
+          className="w-full"
+        >
+          {smsSaving ? "Saving..." : "💾 Save Gateway Settings"}
+        </Button>
+      </div>
     </div>
   );
 }
