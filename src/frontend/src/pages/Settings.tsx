@@ -67,7 +67,7 @@ export function Settings() {
   const card1Key = `${restaurantId}_card1_name`;
   const card2Key = `${restaurantId}_card2_name`;
 
-  // Load GSTIN and card names from localStorage
+  // Load GSTIN, card names, and SMS config from localStorage
   useEffect(() => {
     try {
       setGstNumber(localStorage.getItem(gstinKey) || "");
@@ -76,6 +76,14 @@ export function Settings() {
       setOwnerWhatsAppNumber(
         localStorage.getItem(`${restaurantId}_owner_whatsapp_number`) || "",
       );
+      const lsSms = localStorage.getItem(`${restaurantId}_sms_config`);
+      if (lsSms) {
+        try {
+          setSmsConfig(JSON.parse(lsSms));
+        } catch {
+          // ignore parse error
+        }
+      }
     } catch {
       // ignore
     }
@@ -114,14 +122,16 @@ export function Settings() {
     }
 
     setLoading(true);
-    Promise.all([
-      actor.getSettings().catch(() => null),
-      (actor as any).getSmsConfig().catch(() => null),
-    ]).then(([s, sms]) => {
-      if (s?.name) setForm(s);
-      if (sms) setSmsConfig(sms);
-      setLoading(false);
-    });
+    Promise.all([actor.getSettings().catch(() => null)])
+      .then(([s]) => {
+        if (s?.name) setForm(s);
+      })
+      .catch((err) => {
+        console.log("Settings load error (non-critical):", err);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, [actor, isFetching, restaurantId]);
 
   const handleSave = async () => {
@@ -172,14 +182,13 @@ export function Settings() {
     }
   };
 
-  const handleSaveSmsConfig = async () => {
-    if (!actor) {
-      toast.error("Not connected to backend");
-      return;
-    }
+  const handleSaveSmsConfig = () => {
     setSmsSaving(true);
     try {
-      await (actor as any).updateSmsConfig(smsConfig);
+      localStorage.setItem(
+        `${restaurantId}_sms_config`,
+        JSON.stringify(smsConfig),
+      );
       toast.success("SMS/WhatsApp gateway settings saved!");
     } catch (err) {
       console.error("SMS config save error:", err);
