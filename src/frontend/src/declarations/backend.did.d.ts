@@ -128,16 +128,14 @@ export interface Purchase {
   'notes' : string,
 }
 export interface _SERVICE {
+  // Legacy (global) functions
   'addMenuItem' : ActorMethod<[string, string, number, string], MenuItem>,
   'addTable' : ActorMethod<[string, bigint], Table>,
   'createBill' : ActorMethod<
     [string, string, string, Array<BillItem>, number, number, number, number, string, string, string],
     Bill
   >,
-  'createOrder' : ActorMethod<
-    [string, string, Array<OrderItem>, string],
-    Order
-  >,
+  'createOrder' : ActorMethod<[string, string, Array<OrderItem>, string], Order>,
   'deleteMenuItem' : ActorMethod<[string], boolean>,
   'deleteTable' : ActorMethod<[string], boolean>,
   'deleteBill' : ActorMethod<[string], boolean>,
@@ -176,6 +174,28 @@ export interface _SERVICE {
   'addPurchase' : ActorMethod<[string, string, Array<PurchaseItem>, number, string, string], Purchase>,
   'getPurchases' : ActorMethod<[], Array<Purchase>>,
   'updatePurchaseStatus' : ActorMethod<[string, string], [] | [Purchase]>,
+  'deletePurchase' : ActorMethod<[string], boolean>,
+  // Restaurant-scoped (R) functions — full per-restaurant isolation
+  'getTablesR' : ActorMethod<[string], Array<Table>>,
+  'addTableR' : ActorMethod<[string, string, bigint], Table>,
+  'deleteTableR' : ActorMethod<[string, string], boolean>,
+  'getMenuItemsR' : ActorMethod<[string], Array<MenuItem>>,
+  'addMenuItemR' : ActorMethod<[string, string, string, number, string], MenuItem>,
+  'updateMenuItemR' : ActorMethod<[string, MenuItem], [] | [MenuItem]>,
+  'deleteMenuItemR' : ActorMethod<[string, string], boolean>,
+  'getOrdersR' : ActorMethod<[string], Array<Order>>,
+  'getOrderByTableR' : ActorMethod<[string, string], [] | [Order]>,
+  'createOrderR' : ActorMethod<[string, string, string, Array<OrderItem>, string], Order>,
+  'updateOrderItemsR' : ActorMethod<[string, string, Array<OrderItem>], [] | [Order]>,
+  'updateOrderStatusR' : ActorMethod<[string, string, string], [] | [Order]>,
+  'getSettingsR' : ActorMethod<[string], RestaurantSettings>,
+  'updateSettingsR' : ActorMethod<[string, RestaurantSettings], undefined>,
+  'clearRestaurantBillsAndReset' : ActorMethod<[string], bigint>,
+  'createBillR' : ActorMethod<
+    [string, string, string, string, Array<BillItem>, number, number, number, number, string, string],
+    Bill
+  >,
+  'resetBillCounter' : ActorMethod<[], undefined>,
 }
 export declare const idlService: IDL.ServiceClass;
 export declare const idlInitArgs: IDL.Type[];

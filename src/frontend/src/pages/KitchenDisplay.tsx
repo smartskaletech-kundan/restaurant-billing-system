@@ -2,7 +2,8 @@ import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Order } from "../backend";
-import { useActor } from "../hooks/useActor";
+import { useRestaurant } from "../context/RestaurantContext";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 
 function formatTime(createdAt: bigint) {
   const ms = Number(createdAt) / 1_000_000;
@@ -35,6 +36,7 @@ function ElapsedBadge({ createdAt }: { createdAt: bigint }) {
 
 export function KitchenDisplay() {
   const { actor, isFetching } = useActor();
+  const { restaurantId } = useRestaurant();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,7 +46,7 @@ export function KitchenDisplay() {
   const load = useCallback(async () => {
     if (!actor) return;
     try {
-      const all = await actor.getOrders();
+      const all = await actor.getOrdersR(restaurantId);
       const active = all.filter((o) =>
         ["kotSent", "inProgress", "ready"].includes(o.status),
       );
@@ -56,7 +58,7 @@ export function KitchenDisplay() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [actor]);
+  }, [actor, restaurantId]);
 
   useEffect(() => {
     if (!actor || isFetching) return;
@@ -106,6 +108,8 @@ export function KitchenDisplay() {
   const KOTCard = ({
     order,
     actions,
+    updating,
+    updateStatus,
   }: {
     order: Order;
     actions: {
@@ -113,6 +117,8 @@ export function KitchenDisplay() {
       newStatus: string;
       variant?: "default" | "outline";
     }[];
+    updating: string | null;
+    updateStatus: (id: string, status: string) => void;
   }) => (
     <div className="bg-card border border-border rounded-xl p-4 shadow-card space-y-3">
       <div className="flex items-start justify-between">
@@ -253,6 +259,8 @@ export function KitchenDisplay() {
                     actions={[
                       { label: "▶ Start Preparing", newStatus: "inProgress" },
                     ]}
+                    updating={updating}
+                    updateStatus={updateStatus}
                   />
                 </div>
               ))
@@ -286,6 +294,8 @@ export function KitchenDisplay() {
                   <KOTCard
                     order={order}
                     actions={[{ label: "✓ Mark Ready", newStatus: "ready" }]}
+                    updating={updating}
+                    updateStatus={updateStatus}
                   />
                 </div>
               ))
@@ -320,6 +330,8 @@ export function KitchenDisplay() {
                         variant: "outline",
                       },
                     ]}
+                    updating={updating}
+                    updateStatus={updateStatus}
                   />
                 </div>
               ))

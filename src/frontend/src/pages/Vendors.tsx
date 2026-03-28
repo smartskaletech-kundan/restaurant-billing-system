@@ -18,6 +18,7 @@ import {
 import { Truck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useRestaurant } from "../context/RestaurantContext";
 
 interface Vendor {
   id: string;
@@ -33,7 +34,6 @@ interface Vendor {
   createdAt: number;
 }
 
-const STORAGE_KEY = "smartskale_vendors";
 const CATEGORIES = [
   "Food Supplier",
   "Beverage Supplier",
@@ -42,16 +42,16 @@ const CATEGORIES = [
   "Other",
 ];
 
-function load(): Vendor[] {
+function load(key: string): Vendor[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function save(list: Vendor[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function save(key: string, list: Vendor[]) {
+  localStorage.setItem(key, JSON.stringify(list));
 }
 
 const EMPTY_FORM = {
@@ -67,6 +67,7 @@ const EMPTY_FORM = {
 };
 
 export function Vendors() {
+  const { restaurantId } = useRestaurant();
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -75,8 +76,8 @@ export function Vendors() {
   const [deleteTarget, setDeleteTarget] = useState<Vendor | null>(null);
 
   useEffect(() => {
-    setVendors(load());
-  }, []);
+    setVendors(load(`${restaurantId}_vendors`));
+  }, [restaurantId]);
 
   const filtered = vendors.filter(
     (v) =>
@@ -129,7 +130,7 @@ export function Vendors() {
         v.id === editTarget.id ? { ...v, ...payload } : v,
       );
       setVendors(updated);
-      save(updated);
+      save(`${restaurantId}_vendors`, updated);
       toast.success("Vendor updated");
     } else {
       const newV: Vendor = {
@@ -139,7 +140,7 @@ export function Vendors() {
       };
       const updated = [...vendors, newV];
       setVendors(updated);
-      save(updated);
+      save(`${restaurantId}_vendors`, updated);
       toast.success("Vendor added");
     }
     setDialogOpen(false);
@@ -149,7 +150,7 @@ export function Vendors() {
     if (!deleteTarget) return;
     const updated = vendors.filter((v) => v.id !== deleteTarget.id);
     setVendors(updated);
-    save(updated);
+    save(`${restaurantId}_vendors`, updated);
     setDeleteTarget(null);
     toast.success("Vendor deleted");
   }

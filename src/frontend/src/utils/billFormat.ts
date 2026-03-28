@@ -23,17 +23,22 @@ export function getFYForDate(date: Date): string {
 }
 
 /**
- * Formats a bill number as INV/2025-26/001
+ * Formats a bill number as PREFIX/2025-26/001
+ * If restaurantId provided, reads prefix from localStorage.
  */
 export function formatBillNumber(
   billNumber: number | string,
   date?: Date,
+  restaurantId?: string,
 ): string {
+  const prefix = restaurantId
+    ? localStorage.getItem(`${restaurantId}_invoice_prefix`) || "INV"
+    : "INV";
   const fy = date ? getFYForDate(date) : getCurrentFY();
   const num =
     typeof billNumber === "string"
       ? Number.parseInt(billNumber, 10)
       : billNumber;
   const padded = num.toString().padStart(3, "0");
-  return `INV/${fy}/${padded}`;
+  return `${prefix}/${fy}/${padded}`;
 }

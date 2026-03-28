@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Page } from "../App";
 import type { Bill, Order, Table } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
-import { useActor } from "../hooks/useActor";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 
 interface Props {
   navigateTo: (page: Page) => void;
@@ -37,13 +37,23 @@ export function Dashboard({ navigateTo }: Props) {
     setLoading(true);
     Promise.all([
       actor.getBillsByRestaurant(restaurantId) as Promise<Bill[]>,
-      actor.getOrders(),
-      actor.getTables(),
+      actor.getOrdersR(restaurantId),
+      actor.getTablesR(restaurantId),
     ])
       .then(([b, o, t]) => {
         setBills(b);
-        setOrders(o);
-        setTables(t);
+        setOrders(
+          o.filter(
+            (order: any) =>
+              !order.restaurantId || order.restaurantId === restaurantId,
+          ),
+        );
+        setTables(
+          t.filter(
+            (table: any) =>
+              !table.restaurantId || table.restaurantId === restaurantId,
+          ),
+        );
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -228,10 +238,32 @@ export function Dashboard({ navigateTo }: Props) {
                     <td className="px-5 py-3">
                       <span
                         className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                          bill.settled ? "status-ready" : "status-pending"
+                          (
+                            () => {
+                              const ids: string[] = JSON.parse(
+                                localStorage.getItem(
+                                  `${restaurantId}_settled_bills`,
+                                ) ?? "[]",
+                              );
+                              return (
+                                ids.includes(bill.id ?? "") || bill.settled
+                              );
+                            }
+                          )()
+                            ? "status-ready"
+                            : "status-pending"
                         }`}
                       >
-                        {bill.settled ? "Settled" : "Unsettled"}
+                        {(() => {
+                          const ids: string[] = JSON.parse(
+                            localStorage.getItem(
+                              `${restaurantId}_settled_bills`,
+                            ) ?? "[]",
+                          );
+                          return ids.includes(bill.id ?? "") || bill.settled;
+                        })()
+                          ? "Settled"
+                          : "Unsettled"}
                       </span>
                     </td>
                   </tr>

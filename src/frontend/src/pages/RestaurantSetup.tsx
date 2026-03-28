@@ -9,10 +9,11 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Clock, Mail } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useRestaurant } from "../context/RestaurantContext";
+import { ADMIN_EMAIL, useRestaurant } from "../context/RestaurantContext";
 
 function slugify(name: string): string {
   return name
@@ -36,6 +37,7 @@ export function RestaurantSetup({ onLoginClick }: Props) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const handleNameChange = (val: string) => {
     setRestaurantName(val);
@@ -64,19 +66,79 @@ export function RestaurantSetup({ onLoginClick }: Props) {
     }
     setLoading(true);
     await new Promise((r) => setTimeout(r, 300));
-    const success = setupRestaurant(
+    const result = setupRestaurant(
       restaurantId,
       restaurantName,
       ownerName,
       password,
     );
-    if (!success) {
+    if (result === "duplicate") {
       toast.error(
         `Restaurant ID "${restaurantId}" is already taken. Please choose a different ID.`,
       );
+      setLoading(false);
+      return;
     }
+    // result === 'success'
     setLoading(false);
+    setSubmitted(true);
   };
+
+  if (submitted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.4 }}
+          className="w-full max-w-md"
+        >
+          <Card className="border-slate-700 bg-slate-800/60 backdrop-blur shadow-2xl text-center">
+            <CardContent className="pt-10 pb-10 px-8">
+              <div className="flex items-center justify-center mb-5">
+                <div className="w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-500/50 flex items-center justify-center">
+                  <Clock className="h-10 w-10 text-amber-400" />
+                </div>
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-2">
+                Registration Submitted!
+              </h2>
+              <p className="text-amber-400 font-medium mb-4">
+                Pending Approval
+              </p>
+              <p className="text-slate-400 text-sm leading-relaxed mb-6">
+                Your restaurant registration has been submitted successfully.
+                Our team will review and approve your account shortly. You will
+                be able to log in once your account is approved.
+              </p>
+              <div className="bg-slate-700/50 rounded-lg p-4 mb-6 flex items-start gap-3 text-left">
+                <Mail className="h-4 w-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-slate-400 text-xs mb-1">
+                    For queries, contact the software developer:
+                  </p>
+                  <a
+                    href={`mailto:${ADMIN_EMAIL}`}
+                    className="text-primary text-sm font-medium hover:underline"
+                  >
+                    {ADMIN_EMAIL}
+                  </a>
+                </div>
+              </div>
+              <Button
+                data-ocid="setup.back_to_login.button"
+                onClick={onLoginClick}
+                className="w-full"
+                variant="outline"
+              >
+                ← Back to Login
+              </Button>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
@@ -199,9 +261,7 @@ export function RestaurantSetup({ onLoginClick }: Props) {
                 size="lg"
                 disabled={loading}
               >
-                {loading
-                  ? "Creating Account..."
-                  : "🚀 Create Restaurant Account"}
+                {loading ? "Submitting..." : "🚀 Submit Registration"}
               </Button>
             </form>
 
@@ -217,9 +277,10 @@ export function RestaurantSetup({ onLoginClick }: Props) {
               </button>
             </div>
 
-            <div className="mt-4 p-3 rounded-lg bg-slate-700/40 border border-slate-600/50">
-              <p className="text-xs text-slate-500 text-center">
-                🔒 Each restaurant deployment is fully isolated
+            <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+              <p className="text-xs text-amber-400/80 text-center">
+                ⏳ New registrations require approval from the software
+                developer before login is enabled.
               </p>
             </div>
           </CardContent>

@@ -22,7 +22,8 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Order } from "../backend";
-import { useActor } from "../hooks/useActor";
+import { useRestaurant } from "../context/RestaurantContext";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 
 const TABLES = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"];
 
@@ -70,6 +71,7 @@ function QRPattern({ table }: { table: string }) {
 
 export default function QRMenu() {
   const { actor, isFetching } = useActor();
+  const { restaurantId } = useRestaurant();
   const [selectedTable, setSelectedTable] = useState("T1");
   const [orders, setOrders] = useState<DisplayOrder[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,7 +84,7 @@ export default function QRMenu() {
   const load = useCallback(async () => {
     if (!actor) return;
     try {
-      const all: Order[] = await actor.getOrders();
+      const all: Order[] = await actor.getOrdersR(restaurantId);
       const active = all.filter((o) =>
         ["kotSent", "inProgress", "ready"].includes(o.status),
       );
@@ -107,7 +109,7 @@ export default function QRMenu() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [actor]);
+  }, [actor, restaurantId]);
 
   useEffect(() => {
     if (!actor || isFetching) return;

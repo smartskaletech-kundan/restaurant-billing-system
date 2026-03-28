@@ -19,7 +19,8 @@ import {
 import { Package, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { XLSX } from "../lib/xlsx-shim";
+import { useRestaurant } from "../context/RestaurantContext";
+import { getXLSX } from "../lib/xlsx-shim";
 
 interface InventoryItem {
   id: string;
@@ -30,10 +31,10 @@ interface InventoryItem {
   reorderLevel: number;
   costPrice: number;
   updatedAt: number;
+  hsn: string;
+  tax: string;
 }
 
-const STORAGE_KEY = "smartskale_inventory";
-const CAT_STORAGE_KEY = "smartskale_inventory_categories";
 const DEFAULT_CATEGORIES = [
   "Vegetables",
   "Dairy",
@@ -42,32 +43,33 @@ const DEFAULT_CATEGORIES = [
   "Other",
 ];
 const UNITS = ["kg", "L", "pcs", "box"];
+const GST_SLABS = ["0", "5", "12", "18", "28"];
 
-function load(): InventoryItem[] {
+function load(key: string): InventoryItem[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function save(list: InventoryItem[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function save(key: string, list: InventoryItem[]) {
+  localStorage.setItem(key, JSON.stringify(list));
 }
 
-function loadCategories(): string[] {
+function loadCategories(key: string): string[] {
   try {
-    const stored = localStorage.getItem(CAT_STORAGE_KEY);
+    const stored = localStorage.getItem(key);
     if (stored) return JSON.parse(stored);
   } catch {
     // ignore
   }
-  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+  localStorage.setItem(key, JSON.stringify(DEFAULT_CATEGORIES));
   return DEFAULT_CATEGORIES;
 }
 
-function saveCategories(cats: string[]) {
-  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(cats));
+function saveCategories(key: string, cats: string[]) {
+  localStorage.setItem(key, JSON.stringify(cats));
 }
 
 const EMPTY_FORM = {
@@ -77,11 +79,16 @@ const EMPTY_FORM = {
   unit: "pcs",
   reorderLevel: "",
   costPrice: "",
+  hsn: "",
+  tax: "5",
 };
 
 export function Inventory() {
+  const { restaurantId } = useRestaurant();
   const [items, setItems] = useState<InventoryItem[]>([]);
-  const [categories, setCategories] = useState<string[]>(loadCategories);
+  const [categories, setCategories] = useState<string[]>(() =>
+    loadCategories(`${restaurantId}_inventory_categories`),
+  );
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<InventoryItem | null>(null);
@@ -96,12 +103,12 @@ export function Inventory() {
   const [editingCatValue, setEditingCatValue] = useState("");
 
   useEffect(() => {
-    setItems(load());
-  }, []);
+    setItems(load(`${restaurantId}_inventory`));
+  }, [restaurantId]);
 
   const updateCategories = (cats: string[]) => {
     setCategories(cats);
-    saveCategories(cats);
+    saveCategories(`${restaurantId}_inventory_categories`, cats);
   };
 
   const handleAddCategory = () => {
@@ -170,6 +177,8 @@ export function Inventory() {
       unit: it.unit,
       reorderLevel: it.reorderLevel.toString(),
       costPrice: it.costPrice.toString(),
+      hsn: it.hsn ?? "",
+      tax: it.tax ?? "5",
     });
     setDialogOpen(true);
   }
@@ -187,19 +196,21 @@ export function Inventory() {
       reorderLevel: Number(form.reorderLevel) || 0,
       costPrice: Number(form.costPrice) || 0,
       updatedAt: Date.now(),
+      hsn: form.hsn,
+      tax: form.tax,
     };
     if (editTarget) {
       const updated = items.map((it) =>
         it.id === editTarget.id ? { ...it, ...payload } : it,
       );
       setItems(updated);
-      save(updated);
+      save(`${restaurantId}_inventory`, updated);
       toast.success("Item updated");
     } else {
       const newIt: InventoryItem = { id: Date.now().toString(), ...payload };
       const updated = [...items, newIt];
       setItems(updated);
-      save(updated);
+      save(`${restaurantId}_inventory`, updated);
       toast.success("Item added");
     }
     setDialogOpen(false);
@@ -209,15 +220,25 @@ export function Inventory() {
     if (!deleteTarget) return;
     const updated = items.filter((it) => it.id !== deleteTarget.id);
     setItems(updated);
-    save(updated);
+    save(`${restaurantId}_inventory`, updated);
     setDeleteTarget(null);
     toast.success("Item deleted");
   }
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await getXLSX();
     const ws = XLSX.utils.aoa_to_sheet([
-      ["name", "category", "quantity", "unit", "reorderLevel", "costPrice"],
-      ["Tomatoes", "Vegetables", 50, "kg", 10, 30],
+      [
+        "name",
+        "category",
+        "quantity",
+        "unit",
+        "reorderLevel",
+        "costPrice",
+        "hsn",
+        "tax",
+      ],
+      ["Tomatoes", "Vegetables", 50, "kg", 10, 30, "0702", "5"],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Inventory");
@@ -225,6 +246,7 @@ export function Inventory() {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const XLSX = await getXLSX();
     const file = e.target.files?.[0];
     if (!file) return;
     const arrayBuffer = await file.arrayBuffer();
@@ -236,24 +258,27 @@ export function Inventory() {
       return;
     }
     let count = 0;
-    const existing = load();
+    const existing = load(`${restaurantId}_inventory`);
     for (const row of rows) {
-      const name = (row.name || "").toString().trim();
+      const r = row as Record<string, unknown>;
+      const name = (r.name || "").toString().trim();
       if (!name) continue;
       existing.push({
         id: `${Date.now()}_${count}`,
         name,
-        category: (row.category || "").toString().trim(),
-        quantity: Number(row.quantity) || 0,
-        unit: (row.unit || "pcs").toString().trim(),
-        reorderLevel: Number(row.reorderLevel) || 0,
-        costPrice: Number(row.costPrice) || 0,
+        category: (r.category || "").toString().trim(),
+        quantity: Number(r.quantity) || 0,
+        unit: (r.unit || "pcs").toString().trim(),
+        reorderLevel: Number(r.reorderLevel) || 0,
+        costPrice: Number(r.costPrice) || 0,
         updatedAt: Date.now(),
+        hsn: (r.hsn || "").toString().trim(),
+        tax: (r.tax || "5").toString().trim(),
       });
       count++;
     }
     setItems(existing);
-    save(existing);
+    save(`${restaurantId}_inventory`, existing);
     toast.success(`Imported ${count} items successfully`);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -339,6 +364,9 @@ export function Inventory() {
                     "Name",
                     "Category",
                     "Quantity",
+                    "Unit",
+                    "HSN",
+                    "Tax %",
                     "Reorder Level",
                     "Cost Price",
                     "Updated",
@@ -347,7 +375,7 @@ export function Inventory() {
                   ].map((h) => (
                     <th
                       key={h}
-                      className="px-4 py-3 text-left text-muted-foreground font-medium"
+                      className="px-4 py-3 text-left text-muted-foreground font-medium whitespace-nowrap"
                     >
                       {h}
                     </th>
@@ -367,8 +395,21 @@ export function Inventory() {
                     <td className="px-4 py-3 text-muted-foreground">
                       {it.category || "—"}
                     </td>
-                    <td className="px-4 py-3 text-foreground">
-                      {it.quantity} {it.unit}
+                    <td className="px-4 py-3 text-foreground">{it.quantity}</td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {it.unit}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground font-mono text-xs">
+                      {it.hsn || "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      {it.tax ? (
+                        <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-2 py-0.5 rounded-full">
+                          {it.tax}%
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {it.reorderLevel} {it.unit}
@@ -473,6 +514,37 @@ export function Inventory() {
                   {UNITS.map((u) => (
                     <SelectItem key={u} value={u}>
                       {u}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="inv-hsn">HSN Code</Label>
+              <Input
+                id="inv-hsn"
+                className="h-9"
+                data-ocid="inventory.hsn_input"
+                value={form.hsn}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, hsn: e.target.value }))
+                }
+                placeholder="e.g. 0702"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Tax / GST %</Label>
+              <Select
+                value={form.tax}
+                onValueChange={(v) => setForm((p) => ({ ...p, tax: v }))}
+              >
+                <SelectTrigger className="h-9" data-ocid="inventory.tax_select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {GST_SLABS.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}%
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -12,7 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { XLSX } from "../lib/xlsx-shim";
+import { useRestaurant } from "../context/RestaurantContext";
+import { getXLSX } from "../lib/xlsx-shim";
 
 interface Customer {
   id: string;
@@ -27,18 +28,16 @@ interface Customer {
   createdAt: number;
 }
 
-const STORAGE_KEY = "smartskale_customers";
-
-function loadCustomers(): Customer[] {
+function loadCustomers(key: string): Customer[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function saveCustomers(list: Customer[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function saveCustomers(key: string, list: Customer[]) {
+  localStorage.setItem(key, JSON.stringify(list));
 }
 
 const EMPTY_FORM = {
@@ -51,6 +50,7 @@ const EMPTY_FORM = {
 };
 
 export function Customers() {
+  const { restaurantId } = useRestaurant();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -60,8 +60,8 @@ export function Customers() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setCustomers(loadCustomers());
-  }, []);
+    setCustomers(loadCustomers(`${restaurantId}_customers`));
+  }, [restaurantId]);
 
   const filtered = customers.filter(
     (c) =>
@@ -101,7 +101,7 @@ export function Customers() {
         c.id === editTarget.id ? { ...c, ...form } : c,
       );
       setCustomers(updated);
-      saveCustomers(updated);
+      saveCustomers(`${restaurantId}_customers`, updated);
       toast.success("Customer updated");
     } else {
       const newC: Customer = {
@@ -113,7 +113,7 @@ export function Customers() {
       };
       const updated = [...customers, newC];
       setCustomers(updated);
-      saveCustomers(updated);
+      saveCustomers(`${restaurantId}_customers`, updated);
       toast.success("Customer added");
     }
     setDialogOpen(false);
@@ -123,12 +123,13 @@ export function Customers() {
     if (!deleteTarget) return;
     const updated = customers.filter((c) => c.id !== deleteTarget.id);
     setCustomers(updated);
-    saveCustomers(updated);
+    saveCustomers(`${restaurantId}_customers`, updated);
     setDeleteTarget(null);
     toast.success("Customer deleted");
   }
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await getXLSX();
     const ws = XLSX.utils.aoa_to_sheet([
       ["name", "phone", "email", "address", "companyName", "gstin"],
       [
@@ -146,6 +147,7 @@ export function Customers() {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const XLSX = await getXLSX();
     const file = e.target.files?.[0];
     if (!file) return;
     const arrayBuffer = await file.arrayBuffer();
@@ -160,7 +162,7 @@ export function Customers() {
       return;
     }
     let count = 0;
-    const existing = loadCustomers();
+    const existing = loadCustomers(`${restaurantId}_customers`);
     for (const row of rows) {
       const name = (row.name || "").toString().trim();
       if (!name) continue;
@@ -179,7 +181,7 @@ export function Customers() {
       count++;
     }
     setCustomers(existing);
-    saveCustomers(existing);
+    saveCustomers(`${restaurantId}_customers`, existing);
     toast.success(`Imported ${count} customers successfully`);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };

@@ -19,11 +19,9 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Bill } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
-import { useActor } from "../hooks/useActor";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 import { useCardNames } from "../hooks/useCardNames";
 import { formatBillNumber } from "../utils/billFormat";
-
-type SettlementMode = "Cash" | "HDFC Card" | "SBI Card" | "UPI" | "Split";
 
 function formatTime(createdAt: bigint) {
   const ms = Number(createdAt) / 1_000_000;
@@ -31,12 +29,13 @@ function formatTime(createdAt: bigint) {
 }
 
 const modeIcon: Record<string, string> = {
-  Cash: "\uD83D\uDCB5",
-  Card: "\uD83D\uDCB3",
-  "HDFC Card": "\uD83D\uDCB3",
-  "SBI Card": "\uD83D\uDCB3",
-  UPI: "\uD83D\uDCF1",
-  Split: "\uD83D\uDD00",
+  Cash: "💵",
+  Card: "💳",
+  "HDFC Card": "💳",
+  "SBI Card": "💳",
+  UPI: "📱",
+  Split: "🔀",
+  Multi: "🔀",
 };
 
 function unwrapOptional<T>(val: T | null | T[]): T | null {
@@ -58,6 +57,7 @@ function getFYRange(fy: string): { start: Date; end: Date } | null {
 
 function getDisplayMode(mode: string): string {
   if (mode.startsWith("Split(")) return "Split";
+  if (mode.startsWith("Multi(")) return "Multi";
   return mode || "Cash";
 }
 
@@ -77,6 +77,15 @@ const FY_OPTIONS = [
   { label: "FY 2026-27", value: "2026-27" },
 ];
 
+type SettlementMode = "Cash" | "HDFC Card" | "SBI Card" | "UPI";
+
+interface ResettleAmounts {
+  cash: number;
+  hdfc: number;
+  sbi: number;
+  upi: number;
+}
+
 export function BillHistory() {
   const { actor, isFetching } = useActor();
   const { restaurantId } = useRestaurant();
@@ -90,32 +99,43 @@ export function BillHistory() {
 
   const [selected, setSelected] = useState<Bill | null>(null);
 
+  // Bill customer map from localStorage
+  const [billCustomerMap, setBillCustomerMap] = useState<
+    Record<
+      string,
+      { name: string; mobile: string; company: string; gstin: string }
+    >
+  >({});
+
+  useEffect(() => {
+    try {
+      const map = JSON.parse(
+        localStorage.getItem(`bill_customer_map_${restaurantId}`) || "{}",
+      );
+      setBillCustomerMap(map);
+    } catch {
+      setBillCustomerMap({});
+    }
+  }, [restaurantId]);
+
   // Re-settle
   const [resettleTarget, setResettleTarget] = useState<Bill | null>(null);
-  const [newMode, setNewMode] = useState<SettlementMode>("Cash");
-  const [splitAmounts, setSplitAmounts] = useState({
-    cash: "",
-    hdfc: "",
-    sbi: "",
-    upi: "",
+  const [resettleAmounts, setResettleAmounts] = useState<ResettleAmounts>({
+    cash: 0,
+    hdfc: 0,
+    sbi: 0,
+    upi: 0,
   });
+  const [resettleEnabledModes, setResettleEnabledModes] = useState<Set<string>>(
+    new Set(["cash"]),
+  );
   const [resettling, setResettling] = useState(false);
 
   // Edit
   const [editTarget, setEditTarget] = useState<Bill | null>(null);
   const [editDiscount, setEditDiscount] = useState("");
   const [editMode, setEditMode] = useState<SettlementMode>("Cash");
-  const [editSplit, setEditSplit] = useState({
-    cash: "",
-    hdfc: "",
-    sbi: "",
-    upi: "",
-  });
   const [saving, setSaving] = useState(false);
-
-  // Delete
-  const [deleteTarget, setDeleteTarget] = useState<Bill | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   // Clear All Bills
   const [showClearDialog, setShowClearDialog] = useState(false);
@@ -148,50 +168,63 @@ export function BillHistory() {
     }
 
     // Date range filter
-    if (fromDate && toDate) {
-      const d = new Date(Number(b.createdAt) / 1_000_000);
-      const from = new Date(fromDate);
-      const to = new Date(toDate);
-      to.setHours(23, 59, 59, 999);
-      if (d < from || d > to) return false;
+    const bd = new Date(Number(b.createdAt) / 1_000_000);
+    if (fromDate) {
+      if (bd < new Date(`${fromDate}T00:00:00`)) return false;
+    }
+    if (toDate) {
+      const to = new Date(`${toDate}T23:59:59`);
+      if (bd > to) return false;
     }
 
     return true;
   });
 
-  function buildModeString(
-    mode: SettlementMode,
-    split: { cash: string; hdfc: string; sbi: string; upi: string },
-  ): string {
-    if (mode === "Split") {
-      return `Split(Cash:${Number(split.cash) || 0},HDFC:${Number(split.hdfc) || 0},SBI:${Number(split.sbi) || 0},UPI:${Number(split.upi) || 0})`;
-    }
-    return mode;
+  // Build re-settle mode string from amounts
+  function buildResettleModeString(): string {
+    const parts: string[] = [];
+    if (resettleAmounts.cash > 0)
+      parts.push(`Cash:${resettleAmounts.cash.toFixed(2)}`);
+    if (resettleAmounts.hdfc > 0)
+      parts.push(`HDFC:${resettleAmounts.hdfc.toFixed(2)}`);
+    if (resettleAmounts.sbi > 0)
+      parts.push(`SBI:${resettleAmounts.sbi.toFixed(2)}`);
+    if (resettleAmounts.upi > 0)
+      parts.push(`UPI:${resettleAmounts.upi.toFixed(2)}`);
+    if (parts.length === 0) return "Cash";
+    if (parts.length === 1) return parts[0].split(":")[0];
+    return `Multi(${parts.join(",")})`;
   }
 
-  const splitTotal = (split: {
-    cash: string;
-    hdfc: string;
-    sbi: string;
-    upi: string;
-  }) =>
-    (Number(split.cash) || 0) +
-    (Number(split.hdfc) || 0) +
-    (Number(split.sbi) || 0) +
-    (Number(split.upi) || 0);
+  function resettleAmountsTotal() {
+    return (
+      resettleAmounts.cash +
+      resettleAmounts.hdfc +
+      resettleAmounts.sbi +
+      resettleAmounts.upi
+    );
+  }
+
+  function toggleResettleMode(key: keyof ResettleAmounts, checked: boolean) {
+    setResettleEnabledModes((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(key);
+      else {
+        next.delete(key);
+        setResettleAmounts((p) => ({ ...p, [key]: 0 }));
+      }
+      return next;
+    });
+  }
 
   const handleResettle = async () => {
     if (!actor || !resettleTarget) return;
-    const modeString = buildModeString(newMode, splitAmounts);
-    if (
-      newMode === "Split" &&
-      Math.abs(splitTotal(splitAmounts) - resettleTarget.total) > 0.01
-    ) {
-      toast.error(
-        `Split amounts must equal ₹${resettleTarget.total.toFixed(2)}`,
-      );
+    const total = resettleAmountsTotal();
+    if (total <= 0) {
+      toast.error("Please enter at least one payment amount.");
       return;
     }
+    const modeString = buildResettleModeString();
     setResettling(true);
     const targetId = resettleTarget.id;
     const targetBillNumber = Number(resettleTarget.billNumber);
@@ -209,6 +242,8 @@ export function BillHistory() {
         `Bill ${formatBillNumber(targetBillNumber)} re-settled as ${getDisplayMode(modeString)}`,
       );
       setResettleTarget(null);
+      setResettleAmounts({ cash: 0, hdfc: 0, sbi: 0, upi: 0 });
+      setResettleEnabledModes(new Set(["cash"]));
     } catch (err) {
       console.error("Re-settlement error:", err);
       toast.error("Re-settlement failed. Please try again.");
@@ -222,22 +257,6 @@ export function BillHistory() {
     setEditDiscount(String(bill.discount || 0));
     const dm = getDisplayMode(bill.settlementMode) as SettlementMode;
     setEditMode(dm);
-    if (bill.settlementMode.startsWith("Split(")) {
-      const inner = bill.settlementMode.slice(6, -1);
-      const parsed: Record<string, string> = {};
-      for (const part of inner.split(",")) {
-        const [k, v] = part.split(":");
-        parsed[k] = v;
-      }
-      setEditSplit({
-        cash: parsed.Cash || "",
-        hdfc: parsed.HDFC || "",
-        sbi: parsed.SBI || "",
-        upi: parsed.UPI || "",
-      });
-    } else {
-      setEditSplit({ cash: "", hdfc: "", sbi: "", upi: "" });
-    }
   }
 
   const handleSaveEdit = async () => {
@@ -248,14 +267,9 @@ export function BillHistory() {
       toast.error("Discount cannot exceed bill total");
       return;
     }
-    const modeString = buildModeString(editMode, editSplit);
-    if (
-      editMode === "Split" &&
-      Math.abs(splitTotal(editSplit) - newTotal) > 0.01
-    ) {
-      toast.error(`Split amounts must equal ₹${newTotal.toFixed(2)}`);
-      return;
-    }
+    let modeString = editMode as string;
+    if (editMode === "HDFC Card") modeString = "HDFC Card";
+    else if (editMode === "SBI Card") modeString = "SBI Card";
     setSaving(true);
     try {
       const updatedBill: Bill = {
@@ -281,32 +295,14 @@ export function BillHistory() {
     }
   };
 
-  const handleDelete = async () => {
-    if (!actor || !deleteTarget) return;
-    setDeleting(true);
-    try {
-      await actor.deleteBill(deleteTarget.id);
-      setBills((prev) => prev.filter((b) => b.id !== deleteTarget.id));
-      toast.success(
-        `Bill ${formatBillNumber(Number(deleteTarget.billNumber))} deleted`,
-      );
-      setDeleteTarget(null);
-    } catch (err) {
-      console.error("Delete error:", err);
-      toast.error("Failed to delete bill. Please try again.");
-    } finally {
-      setDeleting(false);
-    }
-  };
-
   const handleClearAll = async () => {
     if (!actor) return;
     setClearing(true);
     try {
-      await actor.clearRestaurantBills(restaurantId);
+      await actor.clearRestaurantBillsAndReset(restaurantId);
       setBills([]);
       setShowClearDialog(false);
-      toast.success("All bills cleared successfully");
+      toast.success("All bills cleared. Invoice counter reset to 01.");
     } catch (err) {
       console.error("Clear error:", err);
       toast.error("Failed to clear bills. Please try again.");
@@ -325,6 +321,17 @@ export function BillHistory() {
       </div>
     );
   }
+
+  const resettleModeRows: Array<{
+    key: keyof ResettleAmounts;
+    label: string;
+    icon: string;
+  }> = [
+    { key: "cash", label: "Cash", icon: "💵" },
+    { key: "hdfc", label: card1Name, icon: "💳" },
+    { key: "sbi", label: card2Name, icon: "💳" },
+    { key: "upi", label: "UPI", icon: "📱" },
+  ];
 
   return (
     <div className="space-y-5" data-ocid="history.page">
@@ -421,7 +428,7 @@ export function BillHistory() {
             className="text-center py-12 text-muted-foreground"
             data-ocid="history.empty_state"
           >
-            <p className="text-4xl mb-2">&#x1F4DC;</p>
+            <p className="text-4xl mb-2">📜</p>
             <p>
               {search
                 ? "No bills match your search"
@@ -438,6 +445,9 @@ export function BillHistory() {
                   </th>
                   <th className="px-5 py-3 text-left text-muted-foreground font-medium">
                     Table
+                  </th>
+                  <th className="px-5 py-3 text-left text-muted-foreground font-medium">
+                    Customer
                   </th>
                   <th className="px-5 py-3 text-left text-muted-foreground font-medium">
                     Date &amp; Time
@@ -460,6 +470,7 @@ export function BillHistory() {
                 {filtered.map((bill, i) => {
                   const canModify = isCurrentMonth(bill.createdAt);
                   const displayMode = getDisplayMode(bill.settlementMode);
+                  const cust = billCustomerMap[bill.id];
                   return (
                     <tr
                       key={bill.id}
@@ -478,6 +489,18 @@ export function BillHistory() {
                       <td className="px-5 py-3 text-foreground">
                         {bill.tableName}
                       </td>
+                      <td className="px-5 py-3 text-muted-foreground text-xs">
+                        {cust?.name ? (
+                          <div>
+                            <p className="font-medium text-foreground">
+                              {cust.name}
+                            </p>
+                            {cust.mobile && <p>{cust.mobile}</p>}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/50">—</span>
+                        )}
+                      </td>
                       <td className="px-5 py-3 text-muted-foreground">
                         {formatTime(bill.createdAt)}
                       </td>
@@ -487,8 +510,7 @@ export function BillHistory() {
                         onKeyDown={(e) => e.stopPropagation()}
                       >
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary">
-                          {modeIcon[displayMode] ?? "\uD83D\uDCB0"}{" "}
-                          {displayMode}
+                          {modeIcon[displayMode] ?? "💰"} {displayMode}
                         </span>
                       </td>
                       <td className="px-5 py-3 text-right text-muted-foreground">
@@ -508,31 +530,13 @@ export function BillHistory() {
                             variant="outline"
                             onClick={() => {
                               setResettleTarget(bill);
-                              const dm = getDisplayMode(
-                                bill.settlementMode,
-                              ) as SettlementMode;
-                              setNewMode(dm);
-                              if (bill.settlementMode.startsWith("Split(")) {
-                                const inner = bill.settlementMode.slice(6, -1);
-                                const parsed: Record<string, string> = {};
-                                for (const part of inner.split(",")) {
-                                  const [k, v] = part.split(":");
-                                  parsed[k] = v;
-                                }
-                                setSplitAmounts({
-                                  cash: parsed.Cash || "",
-                                  hdfc: parsed.HDFC || "",
-                                  sbi: parsed.SBI || "",
-                                  upi: parsed.UPI || "",
-                                });
-                              } else {
-                                setSplitAmounts({
-                                  cash: "",
-                                  hdfc: "",
-                                  sbi: "",
-                                  upi: "",
-                                });
-                              }
+                              setResettleAmounts({
+                                cash: 0,
+                                hdfc: 0,
+                                sbi: 0,
+                                upi: 0,
+                              });
+                              setResettleEnabledModes(new Set(["cash"]));
                             }}
                             data-ocid={`history.resettle.${i + 1}`}
                           >
@@ -545,26 +549,12 @@ export function BillHistory() {
                             title={
                               canModify
                                 ? "Edit bill"
-                                : "Can only edit/delete bills from current month"
+                                : "Can only edit bills from current month"
                             }
                             onClick={() => canModify && openEdit(bill)}
                             data-ocid={`history.edit_button.${i + 1}`}
                           >
                             ✏️ Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={!canModify}
-                            title={
-                              canModify
-                                ? "Delete bill"
-                                : "Can only edit/delete bills from current month"
-                            }
-                            onClick={() => canModify && setDeleteTarget(bill)}
-                            data-ocid={`history.delete_button.${i + 1}`}
-                          >
-                            🗑️ Delete
                           </Button>
                         </div>
                       </td>
@@ -593,93 +583,162 @@ export function BillHistory() {
                 : ""}
             </DialogTitle>
           </DialogHeader>
-          {selected && (
-            <div className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <p className="text-muted-foreground">Table</p>
-                  <p className="font-medium">{selected.tableName}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Date</p>
-                  <p className="font-medium">
-                    {formatTime(selected.createdAt)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Payment Mode</p>
-                  <p className="font-medium">
-                    {modeIcon[getDisplayMode(selected.settlementMode)] ??
-                      "\uD83D\uDCB0"}{" "}
-                    {getDisplayMode(selected.settlementMode)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Cashier</p>
-                  <p className="font-medium">
-                    {selected.cashierName || "Admin"}
-                  </p>
-                </div>
-              </div>
-              <div className="border border-border rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/40">
-                      <th className="px-3 py-2 text-left text-muted-foreground font-medium">
-                        Item
-                      </th>
-                      <th className="px-3 py-2 text-right text-muted-foreground font-medium">
-                        Qty
-                      </th>
-                      <th className="px-3 py-2 text-right text-muted-foreground font-medium">
-                        Total
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selected.items.map((item) => (
-                      <tr
-                        key={item.name}
-                        className="border-b border-border last:border-0"
-                      >
-                        <td className="px-3 py-2">{item.name}</td>
-                        <td className="px-3 py-2 text-right">
-                          {Number(item.quantity)}
-                        </td>
-                        <td className="px-3 py-2 text-right font-medium">
-                          &#x20B9;{item.subtotal.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="space-y-1.5 border-t border-border pt-3">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Subtotal</span>
-                  <span>&#x20B9;{selected.subtotal.toFixed(2)}</span>
-                </div>
-                {selected.discount > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Discount</span>
-                    <span className="text-destructive">
-                      -&#x20B9;{selected.discount.toFixed(2)}
-                    </span>
+          {selected &&
+            (() => {
+              const cust = billCustomerMap[selected.id];
+              return (
+                <div className="space-y-4 text-sm">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-muted-foreground">Table</p>
+                      <p className="font-medium">{selected.tableName}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Date</p>
+                      <p className="font-medium">
+                        {formatTime(selected.createdAt)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Payment Mode</p>
+                      <p className="font-medium">
+                        {modeIcon[getDisplayMode(selected.settlementMode)] ??
+                          "💰"}{" "}
+                        {getDisplayMode(selected.settlementMode)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Cashier</p>
+                      <p className="font-medium">
+                        {selected.cashierName || "Admin"}
+                      </p>
+                    </div>
                   </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Tax</span>
-                  <span>&#x20B9;{selected.taxAmount.toFixed(2)}</span>
+
+                  {/* Customer details if available */}
+                  {cust && (cust.name || cust.mobile) && (
+                    <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 space-y-1">
+                      <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-1">
+                        👤 Customer Details
+                      </p>
+                      {cust.name && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Name</span>
+                          <span className="font-medium">{cust.name}</span>
+                        </div>
+                      )}
+                      {cust.mobile && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Mobile</span>
+                          <span>{cust.mobile}</span>
+                        </div>
+                      )}
+                      {cust.company && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Company</span>
+                          <span>{cust.company}</span>
+                        </div>
+                      )}
+                      {cust.gstin && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">GSTIN</span>
+                          <span className="font-mono text-xs">
+                            {cust.gstin}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="border border-border rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/40">
+                          <th className="px-3 py-2 text-left text-muted-foreground font-medium">
+                            Item
+                          </th>
+                          <th className="px-3 py-2 text-right text-muted-foreground font-medium">
+                            Qty
+                          </th>
+                          <th className="px-3 py-2 text-right text-muted-foreground font-medium">
+                            Total
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selected.items.map((item) => (
+                          <tr
+                            key={item.name}
+                            className="border-b border-border last:border-0"
+                          >
+                            <td className="px-3 py-2">{item.name}</td>
+                            <td className="px-3 py-2 text-right">
+                              {Number(item.quantity)}
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium">
+                              &#x20B9;{item.subtotal.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="space-y-1.5 border-t border-border pt-3">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Subtotal</span>
+                      <span>&#x20B9;{selected.subtotal.toFixed(2)}</span>
+                    </div>
+                    {selected.discount > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Discount</span>
+                        <span className="text-destructive">
+                          -&#x20B9;{selected.discount.toFixed(2)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Tax</span>
+                      <span>&#x20B9;{selected.taxAmount.toFixed(2)}</span>
+                    </div>
+                    {/* Payment breakdown for Multi/Split */}
+                    {(selected.settlementMode.startsWith("Multi(") ||
+                      selected.settlementMode.startsWith("Split(")) && (
+                      <div className="border-t border-border pt-2 mt-1 space-y-1">
+                        <p className="text-xs text-muted-foreground font-semibold">
+                          Payment Breakdown
+                        </p>
+                        {selected.settlementMode
+                          .replace(/^(Multi|Split)\(/, "")
+                          .replace(/\)$/, "")
+                          .split(",")
+                          .map((part) => {
+                            const [k, v] = part.split(":");
+                            return (
+                              <div
+                                key={k}
+                                className="flex justify-between text-xs"
+                              >
+                                <span className="text-muted-foreground">
+                                  {k}
+                                </span>
+                                <span className="font-medium">
+                                  ₹{Number(v).toFixed(2)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+                    <div className="flex justify-between font-bold text-base border-t border-border pt-2">
+                      <span>Total</span>
+                      <span className="text-primary">
+                        &#x20B9;{selected.total.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-between font-bold text-base border-t border-border pt-2">
-                  <span>Total</span>
-                  <span className="text-primary">
-                    &#x20B9;{selected.total.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
+              );
+            })()}
           <DialogFooter>
             <Button
               data-ocid="history.close_button"
@@ -694,7 +753,11 @@ export function BillHistory() {
       {/* Re-settlement Modal */}
       <Dialog
         open={!!resettleTarget}
-        onOpenChange={() => setResettleTarget(null)}
+        onOpenChange={() => {
+          setResettleTarget(null);
+          setResettleAmounts({ cash: 0, hdfc: 0, sbi: 0, upi: 0 });
+          setResettleEnabledModes(new Set(["cash"]));
+        }}
       >
         <DialogContent
           className="sm:max-w-md"
@@ -709,102 +772,100 @@ export function BillHistory() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Current mode:{" "}
-              <span className="font-medium text-foreground">
-                {resettleTarget
-                  ? getDisplayMode(resettleTarget.settlementMode)
-                  : "Cash"}
-              </span>
-              . Select new settlement mode:
-            </p>
-            <div className="flex gap-2 flex-wrap">
-              {(
-                [
-                  "Cash",
-                  "HDFC Card",
-                  "SBI Card",
-                  "UPI",
-                  "Split",
-                ] as SettlementMode[]
-              ).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setNewMode(mode)}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
-                    newMode === mode
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "border-border text-muted-foreground hover:border-primary/50"
-                  }`}
-                >
-                  {modeIcon[mode]}{" "}
-                  {mode === "HDFC Card"
-                    ? card1Name
-                    : mode === "SBI Card"
-                      ? card2Name
-                      : mode}
-                </button>
-              ))}
-            </div>
-            {newMode === "Split" && resettleTarget && (
-              <div className="space-y-2 border border-border rounded-lg p-3">
-                <p className="text-xs font-medium text-muted-foreground">
-                  Split Amounts (Total: ₹{resettleTarget.total.toFixed(2)})
-                </p>
-                {(
-                  [
-                    ["cash", "💵 Cash"],
-                    ["hdfc", `💳 ${card1Name}`],
-                    ["sbi", `💳 ${card2Name}`],
-                    ["upi", "📱 UPI"],
-                  ] as [keyof typeof splitAmounts, string][]
-                ).map(([key, label]) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <Label className="w-24 text-xs">{label}</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={splitAmounts[key]}
-                      onChange={(e) =>
-                        setSplitAmounts((p) => ({
-                          ...p,
-                          [key]: e.target.value,
-                        }))
-                      }
-                      className="h-9 text-sm"
-                    />
-                  </div>
-                ))}
-                <div
-                  className={`text-xs font-medium pt-1 ${Math.abs(splitTotal(splitAmounts) - resettleTarget.total) > 0.01 ? "text-destructive" : "text-green-600"}`}
-                >
-                  Entered: ₹{splitTotal(splitAmounts).toFixed(2)} / Required: ₹
-                  {resettleTarget.total.toFixed(2)}
-                </div>
-              </div>
-            )}
             {resettleTarget && (
-              <div className="text-sm bg-muted/40 rounded-lg p-3 space-y-1">
+              <div className="bg-muted/40 rounded-lg p-3 text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Table</span>
-                  <span>{resettleTarget.tableName}</span>
+                  <span className="text-muted-foreground">Current Mode</span>
+                  <span className="font-medium">
+                    {getDisplayMode(resettleTarget.settlementMode)}
+                  </span>
                 </div>
                 <div className="flex justify-between font-semibold">
-                  <span>Amount</span>
+                  <span>Bill Amount</span>
                   <span className="text-primary">
-                    &#x20B9;{resettleTarget.total.toFixed(2)}
+                    ₹{resettleTarget.total.toFixed(2)}
                   </span>
                 </div>
               </div>
             )}
+            <p className="text-sm text-muted-foreground">
+              Select one or more payment modes and enter amounts:
+            </p>
+            <div className="space-y-2 bg-muted/30 rounded-xl p-3 border border-border">
+              {resettleModeRows.map(({ key, label, icon }) => (
+                <div key={key} className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id={`resettle-mode-${key}`}
+                    checked={resettleEnabledModes.has(key)}
+                    onChange={(e) => toggleResettleMode(key, e.target.checked)}
+                    className="h-4 w-4 flex-shrink-0"
+                  />
+                  <Label
+                    htmlFor={`resettle-mode-${key}`}
+                    className="w-28 flex-shrink-0 text-sm font-medium cursor-pointer"
+                  >
+                    {icon} {label}
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={resettleAmounts[key] || ""}
+                    disabled={!resettleEnabledModes.has(key)}
+                    onChange={(e) => {
+                      const val = Number(e.target.value) || 0;
+                      setResettleAmounts((p) => ({ ...p, [key]: val }));
+                      if (val > 0 && !resettleEnabledModes.has(key)) {
+                        setResettleEnabledModes(
+                          (prev) => new Set([...prev, key]),
+                        );
+                      }
+                    }}
+                    className="h-9 flex-1"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Running total */}
+            <div className="space-y-1 border border-border rounded-lg p-3 bg-card text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total Entered</span>
+                <span
+                  className={`font-semibold ${
+                    resettleTarget &&
+                    resettleAmountsTotal() >= resettleTarget.total - 0.01
+                      ? "text-green-600"
+                      : "text-amber-600"
+                  }`}
+                >
+                  ₹{resettleAmountsTotal().toFixed(2)}
+                </span>
+              </div>
+              {resettleTarget &&
+                resettleAmountsTotal() < resettleTarget.total - 0.01 && (
+                  <div className="flex justify-between text-orange-600">
+                    <span>Balance</span>
+                    <span>
+                      ₹
+                      {(resettleTarget.total - resettleAmountsTotal()).toFixed(
+                        2,
+                      )}
+                    </span>
+                  </div>
+                )}
+            </div>
           </div>
           <DialogFooter className="gap-2">
             <Button
               variant="outline"
-              onClick={() => setResettleTarget(null)}
+              onClick={() => {
+                setResettleTarget(null);
+                setResettleAmounts({ cash: 0, hdfc: 0, sbi: 0, upi: 0 });
+                setResettleEnabledModes(new Set(["cash"]));
+              }}
               data-ocid="history.resettle.cancel_button"
             >
               Cancel
@@ -858,13 +919,7 @@ export function BillHistory() {
                 <Label>Settlement Mode</Label>
                 <div className="flex gap-2 flex-wrap">
                   {(
-                    [
-                      "Cash",
-                      "HDFC Card",
-                      "SBI Card",
-                      "UPI",
-                      "Split",
-                    ] as SettlementMode[]
+                    ["Cash", "HDFC Card", "SBI Card", "UPI"] as SettlementMode[]
                   ).map((mode) => (
                     <button
                       key={mode}
@@ -876,7 +931,9 @@ export function BillHistory() {
                           : "border-border text-muted-foreground hover:border-primary/50"
                       }`}
                     >
-                      {modeIcon[mode]}{" "}
+                      {mode === "Cash" && "💵 "}
+                      {(mode === "HDFC Card" || mode === "SBI Card") && "💳 "}
+                      {mode === "UPI" && "📱 "}
                       {mode === "HDFC Card"
                         ? card1Name
                         : mode === "SBI Card"
@@ -886,43 +943,6 @@ export function BillHistory() {
                   ))}
                 </div>
               </div>
-              {editMode === "Split" && (
-                <div className="space-y-2 border border-border rounded-lg p-3">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Split Amounts (Total: ₹
-                    {Math.max(
-                      0,
-                      editTarget.subtotal +
-                        editTarget.taxAmount -
-                        (Number(editDiscount) || 0),
-                    ).toFixed(2)}
-                    )
-                  </p>
-                  {(
-                    [
-                      ["cash", "💵 Cash"],
-                      ["hdfc", `💳 ${card1Name}`],
-                      ["sbi", `💳 ${card2Name}`],
-                      ["upi", "📱 UPI"],
-                    ] as [keyof typeof editSplit, string][]
-                  ).map(([key, label]) => (
-                    <div key={key} className="flex items-center gap-2">
-                      <Label className="w-24 text-xs">{label}</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="0.00"
-                        value={editSplit[key]}
-                        onChange={(e) =>
-                          setEditSplit((p) => ({ ...p, [key]: e.target.value }))
-                        }
-                        className="h-9 text-sm"
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
           <DialogFooter className="gap-2">
@@ -944,49 +964,6 @@ export function BillHistory() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirm Dialog */}
-      <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <DialogContent className="max-w-sm" data-ocid="history.delete.dialog">
-          <DialogHeader>
-            <DialogTitle>
-              Delete{" "}
-              {deleteTarget
-                ? formatBillNumber(Number(deleteTarget.billNumber))
-                : ""}
-            </DialogTitle>
-          </DialogHeader>
-          {deleteTarget && (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Are you sure you want to delete Bill{" "}
-                <strong>
-                  {formatBillNumber(Number(deleteTarget.billNumber))}
-                </strong>{" "}
-                for <strong>₹{deleteTarget.total.toFixed(2)}</strong> (
-                {deleteTarget.tableName})? This cannot be undone.
-              </p>
-            </div>
-          )}
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setDeleteTarget(null)}
-              data-ocid="history.delete.cancel_button"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleting}
-              data-ocid="history.delete.confirm_button"
-            >
-              {deleting ? "Deleting..." : "Delete Bill"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Clear All Bills Confirmation Dialog */}
       <Dialog open={showClearDialog} onOpenChange={setShowClearDialog}>
         <DialogContent data-ocid="history.clear.dialog">
@@ -995,7 +972,8 @@ export function BillHistory() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             This will permanently delete <strong>all bills</strong> for this
-            restaurant. This cannot be undone.
+            restaurant and reset the invoice counter to <strong>01</strong>.
+            This cannot be undone.
           </p>
           <DialogFooter className="gap-2">
             <Button
@@ -1011,7 +989,7 @@ export function BillHistory() {
               disabled={clearing}
               data-ocid="history.clear.confirm_button"
             >
-              {clearing ? "Clearing..." : "Yes, Clear All Bills"}
+              {clearing ? "Clearing..." : "Yes, Clear All & Reset Counter"}
             </Button>
           </DialogFooter>
         </DialogContent>

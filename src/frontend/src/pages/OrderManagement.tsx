@@ -17,12 +17,12 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { Page, SelectedOrder, SelectedTable } from "../App";
 import type { MenuItem, Order, OrderItem } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
-import { useActor } from "../hooks/useActor";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 import { loadWaitersFromStorage } from "./TableManagement";
 
 interface CartItem {
@@ -51,7 +51,7 @@ interface Props {
   setSelectedOrder: (o: SelectedOrder | null) => void;
 }
 
-const CATEGORIES = ["Starters", "Mains", "Beverages", "Desserts"];
+const FALLBACK_CATEGORIES = ["Starters", "Mains", "Beverages", "Desserts"];
 
 function getKOTKey(orderId: string) {
   return `kot_rounds_${orderId}`;
@@ -93,13 +93,19 @@ export function OrderManagement({
   const [selectedWaiter, setSelectedWaiter] = useState<string>("none");
   const { restaurantId } = useRestaurant();
   const waiters = loadWaitersFromStorage(restaurantId);
+  const dynamicCategories = useMemo(() => {
+    const cats = [
+      ...new Set(menuItems.map((m: any) => m.category).filter(Boolean)),
+    ];
+    return cats.length > 0 ? cats : FALLBACK_CATEGORIES;
+  }, [menuItems]);
 
   useEffect(() => {
     if (!actor || isFetching) return;
     setLoading(true);
-    const promises: Promise<unknown>[] = [actor.getMenuItems()];
+    const promises: Promise<unknown>[] = [actor.getMenuItemsR(restaurantId)];
     if (selectedTable) {
-      promises.push(actor.getOrderByTable(selectedTable.id));
+      promises.push(actor.getOrderByTableR(restaurantId, selectedTable.id));
     }
     Promise.all(promises)
       .then(([items, orderRaw]) => {
@@ -158,7 +164,7 @@ export function OrderManagement({
         console.error("Failed to load order data:", err);
         setLoading(false);
       });
-  }, [actor, isFetching, selectedTable]);
+  }, [actor, isFetching, selectedTable, restaurantId]);
 
   const addToCart = (item: MenuItem) => {
     setCart((prev) => {
@@ -236,10 +242,49 @@ export function OrderManagement({
     setSaving(true);
     try {
       let order = existingOrder;
-      const allItems = buildAllOrderItems(cart);
+
+      // Rebuild sentItems from current kotRounds to ensure accuracy after re-mount
+      const currentSentItems: CartItem[] = [];
+      for (const round of kotRounds) {
+        for (const ri of round.items) {
+          const idx = currentSentItems.findIndex(
+            (s) => s.menuItemId === ri.menuItemId,
+          );
+          if (idx >= 0) {
+            currentSentItems[idx] = {
+              ...currentSentItems[idx],
+              quantity: currentSentItems[idx].quantity + ri.quantity,
+            };
+          } else {
+            currentSentItems.push({ ...ri });
+          }
+        }
+      }
+
+      // Build all items = current sent (from rounds) + new cart
+      const merged: CartItem[] = [...currentSentItems];
+      for (const ni of cart) {
+        const idx = merged.findIndex((s) => s.menuItemId === ni.menuItemId);
+        if (idx >= 0) {
+          merged[idx] = {
+            ...merged[idx],
+            quantity: merged[idx].quantity + ni.quantity,
+          };
+        } else {
+          merged.push({ ...ni });
+        }
+      }
+      const allItems: OrderItem[] = merged.map((c) => ({
+        menuItemId: c.menuItemId,
+        name: c.name,
+        price: c.price,
+        quantity: BigInt(c.quantity),
+        note: c.note,
+      }));
 
       if (!order) {
-        order = await actor.createOrder(
+        order = await actor.createOrderR(
+          restaurantId,
           selectedTable.id,
           selectedTable.name,
           allItems,
@@ -252,11 +297,20 @@ export function OrderManagement({
           tableId: order.tableId,
           tableName: order.tableName,
         });
+        if (selectedTable) {
+          try {
+            await actor.updateTableStatus(selectedTable.id, "occupied");
+          } catch {}
+        }
       } else {
-        await actor.updateOrderItems(order.id, allItems);
+        await actor.updateOrderItemsR(restaurantId, order.id, allItems);
       }
 
-      const statusResult = await actor.updateOrderStatus(order.id, "kotSent");
+      const statusResult = await actor.updateOrderStatusR(
+        restaurantId,
+        order.id,
+        "kotSent",
+      );
       const updatedOrder = Array.isArray(statusResult)
         ? statusResult.length > 0
           ? statusResult[0]
@@ -319,7 +373,11 @@ export function OrderManagement({
     try {
       const allItems = buildAllOrderItems(cart);
       if (existingOrder) {
-        const result = await actor.updateOrderItems(existingOrder.id, allItems);
+        const result = await actor.updateOrderItemsR(
+          restaurantId,
+          existingOrder.id,
+          allItems,
+        );
         const updated = Array.isArray(result)
           ? result.length > 0
             ? result[0]
@@ -328,7 +386,8 @@ export function OrderManagement({
         if (updated) setExistingOrder(updated as Order);
         toast.success("Order updated successfully");
       } else {
-        const order = await actor.createOrder(
+        const order = await actor.createOrderR(
+          restaurantId,
           selectedTable.id,
           selectedTable.name,
           allItems,
@@ -415,7 +474,7 @@ export function OrderManagement({
         quantity: BigInt(c.quantity),
         note: c.note,
       }));
-      await actor.updateOrderItems(existingOrder.id, allItems);
+      await actor.updateOrderItemsR(restaurantId, existingOrder.id, allItems);
       saveKOTRounds(existingOrder.id, updatedRounds);
       setKotRounds(updatedRounds);
       setSentItems(newSent);
@@ -463,7 +522,7 @@ export function OrderManagement({
         quantity: BigInt(c.quantity),
         note: c.note,
       }));
-      await actor.updateOrderItems(existingOrder.id, allItems);
+      await actor.updateOrderItemsR(restaurantId, existingOrder.id, allItems);
       saveKOTRounds(existingOrder.id, updatedRounds);
       setKotRounds(updatedRounds);
       setSentItems(newSent);
@@ -477,7 +536,7 @@ export function OrderManagement({
 
   const subtotal = cart.reduce((s, c) => s + c.price * c.quantity, 0);
   const sentSubtotal = sentItems.reduce((s, c) => s + c.price * c.quantity, 0);
-  const itemsByCategory = CATEGORIES.reduce(
+  const itemsByCategory = dynamicCategories.reduce(
     (acc, cat) => {
       acc[cat] = menuItems.filter((m) => m.category === cat && m.available);
       return acc;
@@ -601,7 +660,7 @@ export function OrderManagement({
           </div>
           <Tabs defaultValue="Starters">
             <TabsList className="m-3 w-auto">
-              {CATEGORIES.map((cat) => (
+              {dynamicCategories.map((cat) => (
                 <TabsTrigger
                   key={cat}
                   value={cat}
@@ -611,7 +670,7 @@ export function OrderManagement({
                 </TabsTrigger>
               ))}
             </TabsList>
-            {CATEGORIES.map((cat) => (
+            {dynamicCategories.map((cat) => (
               <TabsContent key={cat} value={cat} className="p-3 pt-0">
                 {itemsByCategory[cat]?.length === 0 ? (
                   <p className="text-muted-foreground text-sm text-center py-6">

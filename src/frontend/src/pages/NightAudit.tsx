@@ -45,7 +45,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Bill } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
-import { useActor } from "../hooks/useActor";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 
 interface AuditRecord {
   id: string;
@@ -86,14 +86,12 @@ interface PurchaseRecord {
   netTotal: number;
 }
 
-function isSameDay(msTimestamp: number, dateStr: string): boolean {
-  const d = new Date(msTimestamp);
-  const target = new Date(dateStr);
-  return (
-    d.getFullYear() === target.getFullYear() &&
-    d.getMonth() === target.getMonth() &&
-    d.getDate() === target.getDate()
-  );
+function isSameDay(dateValue: number | string, dateStr: string): boolean {
+  const d =
+    typeof dateValue === "string"
+      ? new Date(`${dateValue}T00:00:00`)
+      : new Date(dateValue);
+  return d.toLocaleDateString("en-CA") === dateStr;
 }
 
 function VarianceBadge({
@@ -129,11 +127,9 @@ export default function NightAudit() {
   const { actor, isFetching } = useActor();
 
   const currency =
-    JSON.parse(
-      localStorage.getItem(`smartskale_settings_${restaurantId}`) || "{}",
-    ).currency || "₹";
+    localStorage.getItem(`${restaurantId}_settings_currency`) || "₹";
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = new Date().toLocaleDateString("en-CA");
 
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
@@ -147,13 +143,24 @@ export default function NightAudit() {
   const [shiftRemarks, setShiftRemarks] = useState("");
   const [closingStaff, setClosingStaff] = useState("");
 
-  // Load bills from backend
+  // Load bills from backend + check open tables
   useEffect(() => {
     if (!actor || isFetching) return;
     (async () => {
       try {
-        const result = await (actor as any).getBillsByRestaurant(restaurantId);
-        setBills(result || []);
+        const [billsResult, ordersResult] = await Promise.all([
+          (actor as any).getBillsByRestaurant(restaurantId),
+          actor.getOrdersR(restaurantId).catch(() => [] as any[]),
+        ]);
+        setBills(billsResult || []);
+        const openOrders = (ordersResult || []).filter(
+          (o: any) =>
+            o.status === "open" ||
+            o.status === "occupied" ||
+            o.status === "kotSent" ||
+            o.status === "inProgress",
+        );
+        setHasOpenTables(openOrders.length > 0);
       } catch (e) {
         console.error("Failed to load bills", e);
       } finally {
@@ -183,23 +190,35 @@ export default function NightAudit() {
   const totalSales = todayBills.reduce((sum, b) => sum + Number(b.total), 0);
   const totalBillsCount = todayBills.length;
 
-  const cashTotal = todayBills
-    .filter((b) => (b.settlementMode || "") === "cash")
-    .reduce((s, b) => s + Number(b.total), 0);
+  const cashTotal = todayBills.reduce((s, b) => {
+    const mode = b.settlementMode || "";
+    if (mode === "Cash") return s + Number(b.total);
+    if (mode.startsWith("Split(")) {
+      // Extract cash component from Split(Cash:X,...)
+      const cashMatch = mode.match(/Cash:([\d.]+)/);
+      if (cashMatch) return s + Number(cashMatch[1]);
+    }
+    return s;
+  }, 0);
   const cardTotal = todayBills
-    .filter((b) => (b.settlementMode || "") === "card")
+    .filter((b) => {
+      const m = b.settlementMode || "";
+      return m.includes("Card") || m === "HDFC Card" || m === "SBI Card";
+    })
     .reduce((s, b) => s + Number(b.total), 0);
   const upiTotal = todayBills
-    .filter((b) => (b.settlementMode || "") === "upi")
+    .filter((b) => (b.settlementMode || "") === "UPI")
     .reduce((s, b) => s + Number(b.total), 0);
   const splitTotal = todayBills
-    .filter((b) => (b.settlementMode || "") === "split")
+    .filter((b) => (b.settlementMode || "").startsWith("Split"))
     .reduce((s, b) => s + Number(b.total), 0);
 
   // Expenses today
   const expenses: ExpenseRecord[] = (() => {
     try {
-      return JSON.parse(localStorage.getItem("smartskale_expenses") || "[]");
+      return JSON.parse(
+        localStorage.getItem(`${restaurantId}_expenses`) || "[]",
+      );
     } catch {
       return [];
     }
@@ -211,7 +230,9 @@ export default function NightAudit() {
   // Purchases today
   const purchases: PurchaseRecord[] = (() => {
     try {
-      return JSON.parse(localStorage.getItem("smartskale_purchases") || "[]");
+      return JSON.parse(
+        localStorage.getItem(`${restaurantId}_purchases`) || "[]",
+      );
     } catch {
       return [];
     }
@@ -221,16 +242,7 @@ export default function NightAudit() {
     .reduce((s, p) => s + Number(p.netTotal || p.totalAmount || 0), 0);
 
   // Open tables warning
-  const openOrders: any[] = (() => {
-    try {
-      return JSON.parse(localStorage.getItem("smartskale_orders") || "[]");
-    } catch {
-      return [];
-    }
-  })();
-  const hasOpenTables = openOrders.some(
-    (o) => o.status === "active" || o.status === "running",
-  );
+  const [hasOpenTables, setHasOpenTables] = useState(false);
 
   // Cash reconciliation computed values
   const expectedCash = openingCash + cashTotal;

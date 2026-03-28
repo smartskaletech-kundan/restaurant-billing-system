@@ -60,7 +60,7 @@ function filterBills(bills: Bill[], filter: DateFilter): Bill[] {
   });
 }
 
-/** Parse split mode string like Split(Cash:100,HDFC:200,SBI:50,UPI:30) */
+/** Parse split/multi mode string like Split(Cash:100,HDFC:200,SBI:50,UPI:30) or Multi(Cash:100,...) */
 function parseSplitMode(mode: string): {
   cash: number;
   hdfc: number;
@@ -68,8 +68,10 @@ function parseSplitMode(mode: string): {
   upi: number;
 } {
   const result = { cash: 0, hdfc: 0, sbi: 0, upi: 0 };
-  if (!mode.startsWith("Split(")) return result;
-  const inner = mode.slice(6, -1);
+  if (!mode.startsWith("Split(") && !mode.startsWith("Multi(")) return result;
+  const inner = mode.startsWith("Multi(")
+    ? mode.slice(6, -1)
+    : mode.slice(6, -1);
   for (const part of inner.split(",")) {
     const [key, val] = part.split(":");
     const amount = Number.parseFloat(val) || 0;
@@ -84,6 +86,7 @@ function parseSplitMode(mode: string): {
 /** Get the base mode for filtering (strip split sub-details) */
 function baseMode(mode: string): string {
   if (mode.startsWith("Split")) return "Split";
+  if (mode.startsWith("Multi")) return "Split"; // treat Multi as Split for filter purposes
   return mode;
 }
 
@@ -119,6 +122,22 @@ export function Reports() {
   const [settlementFilter, setSettlementFilter] =
     useState<SettlementFilter>("All");
 
+  // Bill → customer details map from localStorage
+  const billCustomerMap: Record<
+    string,
+    { name: string; mobile: string; company: string; gstin: string }
+  > = useMemo(() => {
+    try {
+      return (
+        JSON.parse(
+          localStorage.getItem(`bill_customer_map_${restaurantId}`) || "{}",
+        ) || {}
+      );
+    } catch {
+      return {};
+    }
+  }, [restaurantId]);
+
   useEffect(() => {
     if (!actor || isFetching) return;
     setLoading(true);
@@ -132,30 +151,39 @@ export function Reports() {
   }, [actor, isFetching, restaurantId]);
 
   const restaurantName: string = useMemo(() => {
-    try {
-      const s = localStorage.getItem("smartskale_settings");
-      if (s) return JSON.parse(s).name || "OUTLET";
-    } catch {}
-    return "OUTLET";
-  }, []);
+    // Settings.tsx saves name as `${restaurantId}_settings_name`
+    return localStorage.getItem(`${restaurantId}_settings_name`) || "OUTLET";
+  }, [restaurantId]);
 
   const filteredBills = useMemo(() => {
-    let base = filterBills(bills, dateFilter);
+    let base: Bill[];
+    if (fromDate && toDate) {
+      // Date range takes priority; skip quick filter
+      const from = new Date(fromDate);
+      const to = new Date(`${toDate}T23:59:59`);
+      base = bills.filter((b) => {
+        const d = new Date(Number(b.createdAt) / 1_000_000);
+        return d >= from && d <= to;
+      });
+    } else if (fromDate) {
+      const from = new Date(fromDate);
+      base = bills.filter(
+        (b) => new Date(Number(b.createdAt) / 1_000_000) >= from,
+      );
+    } else if (toDate) {
+      const to = new Date(`${toDate}T23:59:59`);
+      base = bills.filter(
+        (b) => new Date(Number(b.createdAt) / 1_000_000) <= to,
+      );
+    } else {
+      base = filterBills(bills, dateFilter);
+    }
     const fyRange = getFYRange(selectedFY);
     if (fyRange)
       base = base.filter((b) => {
         const d = new Date(Number(b.createdAt) / 1_000_000);
         return d >= fyRange.start && d <= fyRange.end;
       });
-    if (fromDate && toDate) {
-      const from = new Date(fromDate);
-      const to = new Date(toDate);
-      to.setHours(23, 59, 59, 999);
-      base = base.filter((b) => {
-        const d = new Date(Number(b.createdAt) / 1_000_000);
-        return d >= from && d <= to;
-      });
-    }
     return base;
   }, [bills, dateFilter, selectedFY, fromDate, toDate]);
 
@@ -191,8 +219,8 @@ export function Reports() {
   const modeSummary = useMemo(() => {
     const acc: Record<string, { count: number; total: number }> = {
       Cash: { count: 0, total: 0 },
-      "HDFC Card": { count: 0, total: 0 },
-      "SBI Card": { count: 0, total: 0 },
+      [card1Name]: { count: 0, total: 0 },
+      [card2Name]: { count: 0, total: 0 },
       UPI: { count: 0, total: 0 },
       Split: { count: 0, total: 0 },
     };
@@ -201,6 +229,12 @@ export function Reports() {
       if (m.startsWith("Split(")) {
         acc.Split.count += 1;
         acc.Split.total += b.total;
+      } else if (m === card1Name || m === "HDFC Card") {
+        acc[card1Name].count += 1;
+        acc[card1Name].total += b.total;
+      } else if (m === card2Name || m === "SBI Card") {
+        acc[card2Name].count += 1;
+        acc[card2Name].total += b.total;
       } else {
         const key = m in acc ? m : "Cash";
         acc[key].count += 1;
@@ -208,7 +242,7 @@ export function Reports() {
       }
     }
     return Object.entries(acc).map(([mode, data]) => ({ mode, ...data }));
-  }, [filteredBills]);
+  }, [filteredBills, card1Name, card2Name]);
 
   const splitSubTotals = useMemo(() => {
     const sub = { cash: 0, hdfc: 0, sbi: 0, upi: 0 };
@@ -253,7 +287,7 @@ export function Reports() {
       else if (mode === "HDFC Card") hdfcCard = amt;
       else if (mode === "SBI Card") sbiCard = amt;
       else if (mode === "UPI") upi = amt;
-      else if (mode.startsWith("Split(")) {
+      else if (mode.startsWith("Split(") || mode.startsWith("Multi(")) {
         const split = parseSplitMode(mode);
         cash = split.cash;
         hdfcCard = split.hdfc;
@@ -275,14 +309,17 @@ export function Reports() {
         room: 0,
         staff: b.cashierName || "Admin",
         user: b.cashierName || "Admin",
-        companyName: "",
-        gstin: "",
+        companyName: billCustomerMap[b.id]?.company || "",
+        gstin: billCustomerMap[b.id]?.gstin || "",
         date: Number(b.createdAt) / 1_000_000,
-        isSplit: mode.startsWith("Split"),
-        modeLabel: mode.startsWith("Split(") ? "Split" : mode,
+        isSplit: mode.startsWith("Split") || mode.startsWith("Multi"),
+        modeLabel:
+          mode.startsWith("Split(") || mode.startsWith("Multi(")
+            ? "Multi"
+            : mode,
       };
     });
-  }, [filteredBills, restaurantName]);
+  }, [filteredBills, restaurantName, billCustomerMap]);
 
   // Item-wise sale rows — one row per item per bill
   const itemWiseRows = useMemo(() => {
@@ -306,8 +343,10 @@ export function Reports() {
       paymentMode: string;
       company: string;
       gstNo: string;
+      isFirstItem: boolean;
     }> = [];
 
+    const seenBillIds = new Set<string>();
     for (const b of filteredBills) {
       const ms = Number(b.createdAt) / 1_000_000;
       const d = new Date(ms);
@@ -317,10 +356,9 @@ export function Reports() {
       // Look up customer by matching mobile or by any link if stored on bill
       // Bills don't currently carry a customerMobile field, so we do a basic lookup
       // (future: match by b.customerMobile if available)
-      let company = "";
-      let gstNo = "";
-      // Try to find customer — bills don't have a mobile field in current schema
-      // so we leave blank unless a match is possible in future
+      const custInfo = billCustomerMap[b.id];
+      let company = custInfo?.company || "";
+      let gstNo = custInfo?.gstin || "";
 
       const taxableSale = b.subtotal - (b.discount ?? 0);
       const rndoffRaw =
@@ -329,6 +367,8 @@ export function Reports() {
 
       const billNoFormatted = String(b.billNumber);
 
+      let isFirst = !seenBillIds.has(b.id);
+      if (isFirst) seenBillIds.add(b.id);
       for (const item of b.items) {
         rows.push({
           date: dateStr,
@@ -352,11 +392,13 @@ export function Reports() {
             : b.settlementMode || "Cash",
           company,
           gstNo,
+          isFirstItem: isFirst,
         });
+        isFirst = false;
       }
     }
     return rows;
-  }, [filteredBills]);
+  }, [filteredBills, billCustomerMap]);
 
   function exportItemWiseReport() {
     const headers = [
@@ -469,15 +511,13 @@ export function Reports() {
     );
   }
 
-  // Item wise summary totals
-  const iwTotalGoodsAmt = itemWiseRows.reduce((s, r) => s + r.goodsAmt, 0);
-  const iwTotalDisc = itemWiseRows.reduce((s, r) => s + r.disc, 0);
-  const iwTotalTaxableSale = itemWiseRows.reduce(
-    (s, r) => s + r.taxableSale,
-    0,
-  );
-  const iwTotalTax = itemWiseRows.reduce((s, r) => s + r.tax, 0);
-  const iwTotalBillAmt = itemWiseRows.reduce((s, r) => s + r.billAmt, 0);
+  // Item wise summary totals — bill-level values only counted once per bill
+  const iwBillRows = itemWiseRows.filter((r) => r.isFirstItem);
+  const iwTotalGoodsAmt = iwBillRows.reduce((s, r) => s + r.goodsAmt, 0);
+  const iwTotalDisc = iwBillRows.reduce((s, r) => s + r.disc, 0);
+  const iwTotalTaxableSale = iwBillRows.reduce((s, r) => s + r.taxableSale, 0);
+  const iwTotalTax = iwBillRows.reduce((s, r) => s + r.tax, 0);
+  const iwTotalBillAmt = iwBillRows.reduce((s, r) => s + r.billAmt, 0);
   const iwTotalQty = itemWiseRows.reduce((s, r) => s + r.qty, 0);
   const iwTotalAmount = itemWiseRows.reduce((s, r) => s + r.amount, 0);
 
@@ -629,6 +669,9 @@ export function Reports() {
           <TabsTrigger value="cashier">Cashier Report</TabsTrigger>
           <TabsTrigger value="itemwise" data-ocid="reports.itemwise.tab">
             Item Wise Sale
+          </TabsTrigger>
+          <TabsTrigger value="kotwise" data-ocid="reports.kotwise.tab">
+            KOT Wise Sale
           </TabsTrigger>
         </TabsList>
 
@@ -1330,7 +1373,319 @@ export function Reports() {
             </table>
           </div>
         </TabsContent>
+
+        {/* KOT WISE SALE TAB */}
+        <KotWiseTab restaurantId={restaurantId} />
       </Tabs>
     </div>
+  );
+}
+
+interface KOTRound {
+  roundNo: number;
+  sentAt: string;
+  items: Array<{
+    menuItemId?: string;
+    name: string;
+    quantity: number;
+    price: number;
+    note?: string;
+  }>;
+  waiterName: string;
+}
+
+interface KotWiseRow {
+  date: string;
+  billNo: string;
+  table: string;
+  kotRound: number;
+  waiter: string;
+  itemName: string;
+  qty: number;
+  rate: number;
+  amount: number;
+}
+
+function KotWiseTab({ restaurantId }: { restaurantId: string }) {
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const rawBills = useMemo(() => {
+    try {
+      const stored = localStorage.getItem(`bills_${restaurantId}`);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  }, [restaurantId]);
+
+  const rows = useMemo((): KotWiseRow[] => {
+    const result: KotWiseRow[] = [];
+    for (const bill of rawBills) {
+      const billDate = new Date(
+        typeof bill.createdAt === "bigint"
+          ? Number(bill.createdAt) / 1_000_000
+          : Number(bill.createdAt),
+      );
+      if (fromDate && billDate < new Date(`${fromDate}T00:00:00`)) continue;
+      if (toDate && billDate > new Date(`${toDate}T23:59:59`)) continue;
+
+      const dateStr = billDate.toLocaleDateString("en-IN");
+      const billNo = bill.billNumber
+        ? String(bill.billNumber)
+        : (bill.id?.slice(-6) ?? "—");
+      const table = bill.tableName ?? "—";
+
+      if (bill.orderId) {
+        try {
+          const kotRaw = localStorage.getItem(`kot_rounds_${bill.orderId}`);
+          const rounds: KOTRound[] = kotRaw ? JSON.parse(kotRaw) : [];
+          if (rounds.length > 0) {
+            for (const round of rounds) {
+              for (const item of round.items) {
+                result.push({
+                  date: dateStr,
+                  billNo,
+                  table,
+                  kotRound: round.roundNo,
+                  waiter: round.waiterName || "—",
+                  itemName: item.name,
+                  qty: item.quantity,
+                  rate: item.price,
+                  amount: item.price * item.quantity,
+                });
+              }
+            }
+            continue;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      // No KOT data: show bill items without KOT round info
+      const billItems = bill.items ?? [];
+      if (billItems.length === 0) {
+        result.push({
+          date: dateStr,
+          billNo,
+          table,
+          kotRound: 0,
+          waiter: "—",
+          itemName: "No KOT data",
+          qty: 0,
+          rate: 0,
+          amount: 0,
+        });
+      } else {
+        for (const item of billItems) {
+          result.push({
+            date: dateStr,
+            billNo,
+            table,
+            kotRound: 0,
+            waiter: "—",
+            itemName: item.name ?? "—",
+            qty: Number(item.quantity ?? 0),
+            rate: item.price ?? 0,
+            amount: (item.price ?? 0) * Number(item.quantity ?? 0),
+          });
+        }
+      }
+    }
+    return result;
+  }, [rawBills, fromDate, toDate]);
+
+  const totalAmount = rows.reduce((s, r) => s + r.amount, 0);
+
+  function exportCSV() {
+    const headers = [
+      "Date",
+      "Bill No.",
+      "Table",
+      "KOT Round",
+      "Waiter",
+      "Item Name",
+      "Qty",
+      "Rate",
+      "Amount",
+    ];
+    const csvRows = [
+      headers.join(","),
+      ...rows.map((r) =>
+        [
+          r.date,
+          r.billNo,
+          r.table,
+          r.kotRound || "—",
+          r.waiter,
+          `"${r.itemName}"`,
+          r.qty,
+          r.rate.toFixed(2),
+          r.amount.toFixed(2),
+        ].join(","),
+      ),
+    ];
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "kot-wise-sale-report.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <TabsContent
+      value="kotwise"
+      className="mt-4 space-y-4"
+      data-ocid="reports.kotwise.panel"
+    >
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h3 className="font-semibold text-foreground">
+            KOT Wise Detail Sale Report
+          </h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {rows.length} line items
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Label className="text-xs text-muted-foreground">From</Label>
+          <Input
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="w-36 h-8 text-sm"
+            data-ocid="reports.kotwise.from_input"
+          />
+          <Label className="text-xs text-muted-foreground">To</Label>
+          <Input
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            className="w-36 h-8 text-sm"
+            data-ocid="reports.kotwise.to_input"
+          />
+          {(fromDate || toDate) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setFromDate("");
+                setToDate("");
+              }}
+            >
+              ✕
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={exportCSV}
+            className="gap-2"
+            data-ocid="reports.kotwise.export_button"
+          >
+            <span>⬇</span> Export CSV
+          </Button>
+        </div>
+      </div>
+
+      <div
+        className="overflow-x-auto rounded-xl border border-border shadow-sm"
+        data-ocid="reports.kotwise.table"
+      >
+        <table className="w-full text-xs whitespace-nowrap">
+          <thead>
+            <tr className="bg-muted/60 border-b border-border">
+              {[
+                "Date",
+                "Bill No.",
+                "Table",
+                "KOT Round",
+                "Waiter",
+                "Item Name",
+                "Qty",
+                "Rate",
+                "Amount",
+              ].map((h) => (
+                <th
+                  key={h}
+                  className="px-3 py-2.5 text-left font-semibold text-muted-foreground border-r border-border last:border-r-0"
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={9}
+                  className="text-center py-12 text-muted-foreground"
+                  data-ocid="reports.kotwise.empty_state"
+                >
+                  No KOT data found for this period
+                </td>
+              </tr>
+            ) : (
+              rows.map((r, i) => (
+                <tr
+                  key={`${r.billNo}-${r.kotRound}-${r.itemName}-${i}`}
+                  className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                  data-ocid={`reports.kotwise.item.${i + 1}`}
+                >
+                  <td className="px-3 py-2 text-muted-foreground border-r border-border">
+                    {r.date}
+                  </td>
+                  <td className="px-3 py-2 font-mono border-r border-border">
+                    {r.billNo}
+                  </td>
+                  <td className="px-3 py-2 border-r border-border">
+                    {r.table}
+                  </td>
+                  <td className="px-3 py-2 text-center border-r border-border">
+                    {r.kotRound > 0 ? (
+                      <span className="px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-semibold">
+                        #{r.kotRound}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 border-r border-border">
+                    {r.waiter}
+                  </td>
+                  <td className="px-3 py-2 font-medium border-r border-border">
+                    {r.itemName}
+                  </td>
+                  <td className="px-3 py-2 text-right border-r border-border">
+                    {r.qty}
+                  </td>
+                  <td className="px-3 py-2 text-right border-r border-border">
+                    {r.rate.toFixed(2)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold">
+                    {r.amount.toFixed(2)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+          {rows.length > 0 && (
+            <tfoot>
+              <tr className="bg-muted/60 border-t-2 border-border font-semibold text-xs">
+                <td className="px-3 py-2 border-r border-border" colSpan={8}>
+                  TOTAL ({rows.length} items)
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {totalAmount.toFixed(2)}
+                </td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+    </TabsContent>
   );
 }

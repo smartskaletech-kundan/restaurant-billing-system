@@ -23,7 +23,7 @@ import { toast } from "sonner";
 import type { Page, SelectedTable } from "../App";
 import type { Table as BackendTable, Order } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
-import { useActor } from "../hooks/useActor";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 
 interface Props {
   navigateTo: (page: Page, table?: SelectedTable) => void;
@@ -140,8 +140,8 @@ export function TableManagement({ navigateTo, setSelectedTable }: Props) {
     setLoading(true);
     try {
       const [t, allOrders] = await Promise.all([
-        actor.getTables(),
-        actor.getOrders(),
+        actor.getTablesR(restaurantId),
+        actor.getOrdersR(restaurantId),
       ]);
       setTables(t);
       // Build a map tableId -> active order
@@ -155,7 +155,7 @@ export function TableManagement({ navigateTo, setSelectedTable }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [actor]);
+  }, [actor, restaurantId]);
 
   useEffect(() => {
     if (!actor || isFetching) return;
@@ -226,7 +226,7 @@ export function TableManagement({ navigateTo, setSelectedTable }: Props) {
     if (!actor) return;
     if (!confirm(`Delete ${table.name}?`)) return;
     try {
-      await actor.deleteTable(table.id);
+      await actor.deleteTableR(restaurantId, table.id);
       toast.success("Table deleted");
       await load();
     } catch {
@@ -238,7 +238,8 @@ export function TableManagement({ navigateTo, setSelectedTable }: Props) {
     if (!actor || !addName.trim()) return;
     setSaving(true);
     try {
-      await actor.addTable(
+      await actor.addTableR(
+        restaurantId,
         addName.trim(),
         BigInt(Number.parseInt(addSeats) || 4),
       );

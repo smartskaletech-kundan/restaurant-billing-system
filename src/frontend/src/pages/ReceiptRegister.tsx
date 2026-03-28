@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FileText } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import type { Bill } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
 import { useActor } from "../hooks/useActor";
@@ -14,6 +15,11 @@ export function ReceiptRegister() {
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("all");
+
+  const taxRate = useMemo(() => {
+    const t = localStorage.getItem(`${restaurantId}_settings_taxRate`);
+    return t ? Number(t) : 5;
+  }, [restaurantId]);
 
   useEffect(() => {
     if (!actor || isFetching) return;
@@ -93,7 +99,7 @@ export function ReceiptRegister() {
                     "Table",
                     "Items",
                     "Subtotal",
-                    "Tax (5%)",
+                    `Tax (${taxRate}%)`,
                     "Discount",
                     "Total (₹)",
                     "Date",
@@ -124,7 +130,9 @@ export function ReceiptRegister() {
                     </td>
                     <td className="px-4 py-3">₹{b.subtotal.toFixed(2)}</td>
                     <td className="px-4 py-3">₹{b.taxAmount.toFixed(2)}</td>
-                    <td className="px-4 py-3">₹{b.discount.toFixed(2)}</td>
+                    <td className="px-4 py-3">
+                      ₹{(b.discount ?? 0).toFixed(2)}
+                    </td>
                     <td className="px-4 py-3 font-semibold text-foreground">
                       ₹{b.total.toFixed(2)}
                     </td>

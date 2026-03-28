@@ -19,6 +19,7 @@ import {
 import { ShoppingCart, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useRestaurant } from "../context/RestaurantContext";
 
 interface PurchaseItem {
   lineId: string;
@@ -58,30 +59,28 @@ interface Vendor {
   name: string;
 }
 
-const STORAGE_KEY = "smartskale_purchases";
-const VENDOR_KEY = "smartskale_vendors";
 const PAYMENT_STATUSES = ["Paid", "Pending", "Partial"];
 const UNITS = ["kg", "L", "pcs", "box"];
 const GST_RATES = [0, 5, 12, 18, 28];
 
-function loadPurchases(): Purchase[] {
+function loadPurchases(key: string): Purchase[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function loadVendors(): Vendor[] {
+function loadVendors(key: string): Vendor[] {
   try {
-    return JSON.parse(localStorage.getItem(VENDOR_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function savePurchases(list: Purchase[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function savePurchases(key: string, list: Purchase[]) {
+  localStorage.setItem(key, JSON.stringify(list));
 }
 
 function newLine(): PurchaseItem {
@@ -104,6 +103,7 @@ function paymentBadgeVariant(status: string) {
 }
 
 export function Purchases() {
+  const { restaurantId } = useRestaurant();
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -125,9 +125,9 @@ export function Purchases() {
   const [discountInput, setDiscountInput] = useState(0);
 
   useEffect(() => {
-    setPurchases(loadPurchases());
-    setVendors(loadVendors());
-  }, []);
+    setPurchases(loadPurchases(`${restaurantId}_purchases`));
+    setVendors(loadVendors(`${restaurantId}_vendors`));
+  }, [restaurantId]);
 
   const filteredPurchases = purchases.filter((p) => {
     if (!fromDate || !toDate) return true;
@@ -139,7 +139,7 @@ export function Purchases() {
   });
 
   const handleOpenDialog = () => {
-    setVendors(loadVendors());
+    setVendors(loadVendors(`${restaurantId}_vendors`));
     setDiscountType("flat");
     setDiscountInput(0);
     setDialogOpen(true);
@@ -196,7 +196,7 @@ export function Purchases() {
     };
     const updated = [newP, ...purchases];
     setPurchases(updated);
-    savePurchases(updated);
+    savePurchases(`${restaurantId}_purchases`, updated);
     setDialogOpen(false);
     setForm({
       vendorId: "",
@@ -215,7 +215,7 @@ export function Purchases() {
       p.id === statusDialogTarget.id ? { ...p, paymentStatus: newStatus } : p,
     );
     setPurchases(updated);
-    savePurchases(updated);
+    savePurchases(`${restaurantId}_purchases`, updated);
     setStatusDialogTarget(null);
     toast.success("Payment status updated");
   }

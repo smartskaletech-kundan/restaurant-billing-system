@@ -431,19 +431,26 @@ export function CouponManagement() {
         const result = await (actor as any).sendOtp(mobile, otp);
         if (!result.success) {
           if (result.response.toLowerCase().includes("not configured")) {
-            toast.error(
-              "SMS gateway not configured. Please set it up in Settings → SMS / WhatsApp Gateway.",
-            );
+            toast.info(`SMS gateway not configured. OTP for demo: ${otp}`);
           } else {
             toast.error(`Failed to send OTP: ${result.response}`);
+            return;
           }
+        } else {
+          toast.success(`OTP sent to ${mobile}`);
+        }
+      } catch (err: any) {
+        console.error("sendOtp error:", err);
+        if (
+          err?.message?.includes("has no query method") ||
+          err?.message?.includes("not found") ||
+          err?.message?.includes("has no update method")
+        ) {
+          toast.info(`SMS gateway not configured. OTP for demo: ${otp}`);
+        } else {
+          toast.error("Failed to send OTP. Please check gateway settings.");
           return;
         }
-        toast.success(`OTP sent to ${mobile}`);
-      } catch (err) {
-        console.error("sendOtp error:", err);
-        toast.error("Failed to send OTP. Please check gateway settings.");
-        return;
       }
     } else {
       toast.error("Not connected to backend");

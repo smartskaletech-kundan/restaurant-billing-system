@@ -19,6 +19,7 @@ import {
 import { CreditCard, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useRestaurant } from "../context/RestaurantContext";
 
 interface Expense {
   id: string;
@@ -29,8 +30,6 @@ interface Expense {
   paidBy: string;
 }
 
-const STORAGE_KEY = "smartskale_expenses";
-const CAT_STORAGE_KEY = "smartskale_expense_categories";
 const DEFAULT_CATEGORIES = [
   "Food & Beverage",
   "Utilities",
@@ -39,36 +38,39 @@ const DEFAULT_CATEGORIES = [
   "Other",
 ];
 
-function load(): Expense[] {
+function load(key: string): Expense[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function save(list: Expense[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function save(key: string, list: Expense[]) {
+  localStorage.setItem(key, JSON.stringify(list));
 }
 
-function loadCategories(): string[] {
+function loadCategories(key: string): string[] {
   try {
-    const stored = localStorage.getItem(CAT_STORAGE_KEY);
+    const stored = localStorage.getItem(key);
     if (stored) return JSON.parse(stored);
   } catch {
     // ignore
   }
-  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+  localStorage.setItem(key, JSON.stringify(DEFAULT_CATEGORIES));
   return DEFAULT_CATEGORIES;
 }
 
-function saveCategories(cats: string[]) {
-  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(cats));
+function saveCategories(key: string, cats: string[]) {
+  localStorage.setItem(key, JSON.stringify(cats));
 }
 
 export function Expenses() {
+  const { restaurantId } = useRestaurant();
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [categories, setCategories] = useState<string[]>(loadCategories);
+  const [categories, setCategories] = useState<string[]>(() =>
+    loadCategories(`${restaurantId}_expense_categories`),
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
   const [fromDate, setFromDate] = useState("");
@@ -87,8 +89,8 @@ export function Expenses() {
   const [editingCatValue, setEditingCatValue] = useState("");
 
   useEffect(() => {
-    setExpenses(load());
-  }, []);
+    setExpenses(load(`${restaurantId}_expenses`));
+  }, [restaurantId]);
 
   // Keep form.category in sync when categories change
   useEffect(() => {
@@ -97,7 +99,7 @@ export function Expenses() {
 
   const updateCategories = (cats: string[]) => {
     setCategories(cats);
-    saveCategories(cats);
+    saveCategories(`${restaurantId}_expense_categories`, cats);
   };
 
   const handleAddCategory = () => {
@@ -175,7 +177,7 @@ export function Expenses() {
     };
     const updated = [newE, ...expenses];
     setExpenses(updated);
-    save(updated);
+    save(`${restaurantId}_expenses`, updated);
     setDialogOpen(false);
     setForm({
       category: categories[0] ?? "",
@@ -190,7 +192,7 @@ export function Expenses() {
     if (!deleteTarget) return;
     const updated = expenses.filter((e) => e.id !== deleteTarget.id);
     setExpenses(updated);
-    save(updated);
+    save(`${restaurantId}_expenses`, updated);
     setDeleteTarget(null);
     toast.success("Expense deleted");
   }

@@ -107,14 +107,17 @@ export function GSTReports() {
     });
   }, [bills, monthFilter, fromDate, toDate]);
 
-  const totalTaxable = filteredBills.reduce((s, b) => s + b.subtotal, 0);
+  const totalTaxable = filteredBills.reduce(
+    (s, b) => s + (b.subtotal - (b.discount ?? 0)),
+    0,
+  );
   const totalGST = filteredBills.reduce((s, b) => s + b.taxAmount, 0);
   const cgst = totalGST / 2;
   const sgst = totalGST / 2;
 
   const purchases: Purchase[] = useMemo(() => {
     try {
-      const raw = localStorage.getItem(`purchases_${restaurantId}`);
+      const raw = localStorage.getItem(`${restaurantId}_purchases`);
       if (raw) return JSON.parse(raw);
     } catch {}
     return [];
@@ -144,12 +147,47 @@ export function GSTReports() {
     });
   }, [purchases, monthFilter, fromDate, toDate]);
 
-  // GSTR-1: B2B bills (customer has GSTIN — bills don't store customer mobile yet, so always empty)
-  // Future: match by b.customerMobile when that field is available
-  const b2bBills: Array<{ bill: Bill; customer: CustomerRecord | null }> = [];
+  // Load bill→customer map saved at billing time
+  const billCustomerMap: Record<
+    string,
+    { mobile: string; name: string; company: string; gstin: string }
+  > = useMemo(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem(`bill_customer_map_${restaurantId}`) || "{}",
+      );
+    } catch {
+      return {};
+    }
+  }, [restaurantId]);
 
-  // GSTR-1: Non-B2B bills (all bills, since no customer GSTIN matching yet)
-  const nonB2BBills = filteredBills;
+  // GSTR-1: B2B bills — bills where the customer has a GSTIN
+  const b2bBills: Array<{ bill: Bill; customer: CustomerRecord | null }> =
+    useMemo(() => {
+      return filteredBills
+        .filter((b) => {
+          const c = billCustomerMap[b.id];
+          return c && c.gstin?.trim().length > 0;
+        })
+        .map((b) => {
+          const c = billCustomerMap[b.id];
+          return {
+            bill: b,
+            customer: c
+              ? {
+                  mobile: c.mobile,
+                  name: c.name,
+                  companyName: c.company,
+                  gstin: c.gstin,
+                }
+              : null,
+          };
+        });
+    }, [filteredBills, billCustomerMap]);
+
+  // GSTR-1: Non-B2B bills (no GSTIN customer)
+  const b2bBillIds = new Set(b2bBills.map(({ bill }) => bill.id));
+  const nonB2BBills = filteredBills.filter((b) => !b2bBillIds.has(b.id));
 
   // B2CL: >250000 without GSTIN
   const b2clBills = nonB2BBills.filter((b) => b.total > 250000);
@@ -187,7 +225,8 @@ export function GSTReports() {
       }
     > = {};
     for (const b of filteredBills) {
-      const taxRatio = b.subtotal > 0 ? b.taxAmount / b.subtotal : 0;
+      const taxBase = b.subtotal - (b.discount ?? 0);
+      const taxRatio = taxBase > 0 ? b.taxAmount / taxBase : 0;
       for (const item of b.items) {
         if (!map[item.name])
           map[item.name] = {
@@ -1122,7 +1161,7 @@ export function GSTReports() {
               <input
                 ref={gstr2aFileInputRef}
                 type="file"
-                accept=".csv,.xlsx,.xls,.json"
+                accept=".csv,.json"
                 className="hidden"
                 onChange={handleGstr2aImport}
                 data-ocid="gst.gstr2a.upload_button"

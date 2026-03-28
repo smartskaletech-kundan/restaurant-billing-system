@@ -201,9 +201,7 @@ function SummaryReport() {
   const { actor, isFetching } = useActor();
 
   const currency =
-    JSON.parse(
-      localStorage.getItem(`smartskale_settings_${restaurantId}`) || "{}",
-    ).currency || "₹";
+    localStorage.getItem(`${restaurantId}_settings_currency`) || "INR";
 
   const today = new Date().toISOString().split("T")[0];
   const currentYear = new Date().getFullYear();
@@ -300,16 +298,19 @@ function SummaryReport() {
     const totalBills = filteredBills.length;
     const avgBill = totalBills > 0 ? totalSales / totalBills : 0;
     const cash = filteredBills
-      .filter((b) => (b.settlementMode || "") === "cash")
+      .filter((b) => (b.settlementMode || "").toLowerCase() === "cash")
       .reduce((s, b) => s + Number(b.total), 0);
     const card = filteredBills
-      .filter((b) => (b.settlementMode || "") === "card")
+      .filter((b) => {
+        const m = (b.settlementMode || "").toLowerCase();
+        return m.includes("card");
+      })
       .reduce((s, b) => s + Number(b.total), 0);
     const upi = filteredBills
-      .filter((b) => (b.settlementMode || "") === "upi")
+      .filter((b) => (b.settlementMode || "").toLowerCase() === "upi")
       .reduce((s, b) => s + Number(b.total), 0);
     const split = filteredBills
-      .filter((b) => (b.settlementMode || "") === "split")
+      .filter((b) => (b.settlementMode || "").toLowerCase().startsWith("split"))
       .reduce((s, b) => s + Number(b.total), 0);
 
     setSalesSummary({
@@ -337,7 +338,9 @@ function SummaryReport() {
     // Expenses
     const expenses: any[] = (() => {
       try {
-        return JSON.parse(localStorage.getItem("smartskale_expenses") || "[]");
+        return JSON.parse(
+          localStorage.getItem(`${restaurantId}_expenses`) || "[]",
+        );
       } catch {
         return [];
       }
@@ -355,7 +358,9 @@ function SummaryReport() {
     // Purchases
     const purchases: any[] = (() => {
       try {
-        return JSON.parse(localStorage.getItem("smartskale_purchases") || "[]");
+        return JSON.parse(
+          localStorage.getItem(`${restaurantId}_purchases`) || "[]",
+        );
       } catch {
         return [];
       }
@@ -379,7 +384,8 @@ function SummaryReport() {
     const audits: any[] = (() => {
       try {
         return JSON.parse(
-          localStorage.getItem("smartskale_night_audits") || "[]",
+          localStorage.getItem(`smartskale_night_audits_${restaurantId}`) ||
+            "[]",
         );
       } catch {
         return [];
@@ -441,10 +447,9 @@ function SummaryReport() {
       if (period === "daily" || reconciliationData.length === 1) {
         const r = reconciliationData[0];
         msg += `Date: ${r.date}\n`;
-        if (r.openingFloat !== undefined)
-          msg += `Opening Float: ${currency}${Number(r.openingFloat).toFixed(2)}\n`;
-        if (r.expectedCash !== undefined)
-          msg += `Expected Cash: ${currency}${Number(r.expectedCash).toFixed(2)}\n`;
+        if (r.openingCash !== undefined)
+          msg += `Opening Float: ${currency}${Number(r.openingCash).toFixed(2)}\n`;
+        msg += `Expected Cash: ${currency}${((r.openingCash ?? 0) + (r.cashTotal ?? 0)).toFixed(2)}\n`;
         if (r.cashHandover !== undefined)
           msg += `Actual Handover: ${currency}${Number(r.cashHandover).toFixed(2)}\n`;
         if (r.cashVariance !== undefined) {
@@ -915,7 +920,7 @@ function SummaryReport() {
                               : `OVER ${currency}${variance.toFixed(2)}`;
                       return (
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                          {r.openingFloat !== undefined && (
+                          {r.openingCash !== undefined && (
                             <div className="p-3 bg-muted rounded-lg">
                               <p className="text-xs text-muted-foreground">
                                 Opening Float
@@ -926,17 +931,19 @@ function SummaryReport() {
                               </p>
                             </div>
                           )}
-                          {r.expectedCash !== undefined && (
+                          {
                             <div className="p-3 bg-muted rounded-lg">
                               <p className="text-xs text-muted-foreground">
                                 Expected Cash
                               </p>
                               <p className="font-semibold">
                                 {currency}
-                                {Number(r.expectedCash).toFixed(2)}
+                                {(
+                                  (r.openingCash ?? 0) + (r.cashTotal ?? 0)
+                                ).toFixed(2)}
                               </p>
                             </div>
-                          )}
+                          }
                           {r.cashHandover !== undefined && (
                             <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
                               <p className="text-xs text-muted-foreground">
@@ -1020,13 +1027,13 @@ function SummaryReport() {
                                   {r.date}
                                 </TableCell>
                                 <TableCell>
-                                  {r.openingFloat !== undefined
-                                    ? `${currency}${Number(r.openingFloat).toFixed(2)}`
+                                  {r.openingCash !== undefined
+                                    ? `${currency}${Number(r.openingCash).toFixed(2)}`
                                     : "-"}
                                 </TableCell>
                                 <TableCell>
                                   {r.expectedCash !== undefined
-                                    ? `${currency}${Number(r.expectedCash).toFixed(2)}`
+                                    ? `${currency}${((r.openingCash ?? 0) + (r.cashTotal ?? 0)).toFixed(2)}`
                                     : "-"}
                                 </TableCell>
                                 <TableCell className="font-medium text-blue-400">

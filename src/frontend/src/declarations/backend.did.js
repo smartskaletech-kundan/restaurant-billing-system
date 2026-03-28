@@ -126,35 +126,12 @@ export const Purchase = IDL.Record({
   'notes' : IDL.Text,
 });
 
-export const idlService = IDL.Service({
-  'addMenuItem' : IDL.Func(
-      [IDL.Text, IDL.Text, IDL.Float64, IDL.Text],
-      [MenuItem],
-      [],
-    ),
+const serviceEntries = {
+  // Legacy
+  'addMenuItem' : IDL.Func([IDL.Text, IDL.Text, IDL.Float64, IDL.Text], [MenuItem], []),
   'addTable' : IDL.Func([IDL.Text, IDL.Nat], [Table], []),
-  'createBill' : IDL.Func(
-      [
-        IDL.Text,
-        IDL.Text,
-        IDL.Text,
-        IDL.Vec(BillItem),
-        IDL.Float64,
-        IDL.Float64,
-        IDL.Float64,
-        IDL.Float64,
-        IDL.Text,
-        IDL.Text,
-        IDL.Text,
-      ],
-      [Bill],
-      [],
-    ),
-  'createOrder' : IDL.Func(
-      [IDL.Text, IDL.Text, IDL.Vec(OrderItem), IDL.Text],
-      [Order],
-      [],
-    ),
+  'createBill' : IDL.Func([IDL.Text,IDL.Text,IDL.Text,IDL.Vec(BillItem),IDL.Float64,IDL.Float64,IDL.Float64,IDL.Float64,IDL.Text,IDL.Text,IDL.Text],[Bill],[]),
+  'createOrder' : IDL.Func([IDL.Text, IDL.Text, IDL.Vec(OrderItem), IDL.Text], [Order], []),
   'deleteMenuItem' : IDL.Func([IDL.Text], [IDL.Bool], []),
   'deleteTable' : IDL.Func([IDL.Text], [IDL.Bool], []),
   'deleteBill' : IDL.Func([IDL.Text], [IDL.Bool], []),
@@ -171,11 +148,7 @@ export const idlService = IDL.Service({
   'updateBill' : IDL.Func([Bill], [IDL.Opt(Bill)], []),
   'getDueBills' : IDL.Func([], [IDL.Vec(Bill)], ['query']),
   'updateMenuItem' : IDL.Func([MenuItem], [IDL.Opt(MenuItem)], []),
-  'updateOrderItems' : IDL.Func(
-      [IDL.Text, IDL.Vec(OrderItem)],
-      [IDL.Opt(Order)],
-      [],
-    ),
+  'updateOrderItems' : IDL.Func([IDL.Text, IDL.Vec(OrderItem)], [IDL.Opt(Order)], []),
   'updateOrderStatus' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Order)], []),
   'updateSettings' : IDL.Func([RestaurantSettings], [], []),
   'updateTableStatus' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Table)], []),
@@ -197,158 +170,95 @@ export const idlService = IDL.Service({
   'addPurchase' : IDL.Func([IDL.Text, IDL.Text, IDL.Vec(PurchaseItem), IDL.Float64, IDL.Text, IDL.Text], [Purchase], []),
   'getPurchases' : IDL.Func([], [IDL.Vec(Purchase)], ['query']),
   'updatePurchaseStatus' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Purchase)], []),
-});
+  'deletePurchase' : IDL.Func([IDL.Text], [IDL.Bool], []),
+  'resetBillCounter' : IDL.Func([], [], []),
+  // Restaurant-scoped (R) functions
+  'getTablesR' : IDL.Func([IDL.Text], [IDL.Vec(Table)], ['query']),
+  'addTableR' : IDL.Func([IDL.Text, IDL.Text, IDL.Nat], [Table], []),
+  'deleteTableR' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+  'getMenuItemsR' : IDL.Func([IDL.Text], [IDL.Vec(MenuItem)], ['query']),
+  'addMenuItemR' : IDL.Func([IDL.Text, IDL.Text, IDL.Text, IDL.Float64, IDL.Text], [MenuItem], []),
+  'updateMenuItemR' : IDL.Func([IDL.Text, MenuItem], [IDL.Opt(MenuItem)], []),
+  'deleteMenuItemR' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+  'getOrdersR' : IDL.Func([IDL.Text], [IDL.Vec(Order)], ['query']),
+  'getOrderByTableR' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Order)], ['query']),
+  'createOrderR' : IDL.Func([IDL.Text, IDL.Text, IDL.Text, IDL.Vec(OrderItem), IDL.Text], [Order], []),
+  'updateOrderItemsR' : IDL.Func([IDL.Text, IDL.Text, IDL.Vec(OrderItem)], [IDL.Opt(Order)], []),
+  'updateOrderStatusR' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Opt(Order)], []),
+  'getSettingsR' : IDL.Func([IDL.Text], [RestaurantSettings], ['query']),
+  'updateSettingsR' : IDL.Func([IDL.Text, RestaurantSettings], [], []),
+  'clearRestaurantBillsAndReset' : IDL.Func([IDL.Text], [IDL.Nat], []),
+  'createBillR' : IDL.Func([IDL.Text,IDL.Text,IDL.Text,IDL.Text,IDL.Vec(BillItem),IDL.Float64,IDL.Float64,IDL.Float64,IDL.Float64,IDL.Text,IDL.Text],[Bill],[]),
+};
+
+export const idlService = IDL.Service(serviceEntries);
 
 export const idlInitArgs = [];
 
 export const idlFactory = ({ IDL }) => {
   const MenuItem = IDL.Record({
-    'id' : IDL.Text,
-    'name' : IDL.Text,
-    'description' : IDL.Text,
-    'available' : IDL.Bool,
-    'category' : IDL.Text,
-    'price' : IDL.Float64,
+    'id' : IDL.Text, 'name' : IDL.Text, 'description' : IDL.Text,
+    'available' : IDL.Bool, 'category' : IDL.Text, 'price' : IDL.Float64,
   });
   const Table = IDL.Record({
-    'id' : IDL.Text,
-    'status' : IDL.Text,
-    'name' : IDL.Text,
-    'seats' : IDL.Nat,
+    'id' : IDL.Text, 'status' : IDL.Text, 'name' : IDL.Text, 'seats' : IDL.Nat,
   });
   const BillItem = IDL.Record({
-    'name' : IDL.Text,
-    'quantity' : IDL.Nat,
-    'price' : IDL.Float64,
-    'subtotal' : IDL.Float64,
+    'name' : IDL.Text, 'quantity' : IDL.Nat, 'price' : IDL.Float64, 'subtotal' : IDL.Float64,
   });
   const Bill = IDL.Record({
-    'id' : IDL.Text,
-    'total' : IDL.Float64,
-    'settled' : IDL.Bool,
-    'createdAt' : IDL.Int,
-    'tableId' : IDL.Text,
-    'orderId' : IDL.Text,
-    'billNumber' : IDL.Nat,
-    'discount' : IDL.Float64,
-    'tableName' : IDL.Text,
-    'items' : IDL.Vec(BillItem),
-    'taxAmount' : IDL.Float64,
-    'subtotal' : IDL.Float64,
-    'settlementMode' : IDL.Text,
-    'cashierName' : IDL.Text,
-    'restaurantId' : IDL.Text,
+    'id' : IDL.Text, 'total' : IDL.Float64, 'settled' : IDL.Bool,
+    'createdAt' : IDL.Int, 'tableId' : IDL.Text, 'orderId' : IDL.Text,
+    'billNumber' : IDL.Nat, 'discount' : IDL.Float64, 'tableName' : IDL.Text,
+    'items' : IDL.Vec(BillItem), 'taxAmount' : IDL.Float64, 'subtotal' : IDL.Float64,
+    'settlementMode' : IDL.Text, 'cashierName' : IDL.Text, 'restaurantId' : IDL.Text,
   });
   const OrderItem = IDL.Record({
-    'name' : IDL.Text,
-    'note' : IDL.Text,
-    'quantity' : IDL.Nat,
-    'price' : IDL.Float64,
-    'menuItemId' : IDL.Text,
+    'name' : IDL.Text, 'note' : IDL.Text, 'quantity' : IDL.Nat,
+    'price' : IDL.Float64, 'menuItemId' : IDL.Text,
   });
   const Order = IDL.Record({
-    'id' : IDL.Text,
-    'status' : IDL.Text,
-    'createdAt' : IDL.Int,
-    'tableId' : IDL.Text,
-    'specialInstructions' : IDL.Text,
-    'tableName' : IDL.Text,
-    'items' : IDL.Vec(OrderItem),
+    'id' : IDL.Text, 'status' : IDL.Text, 'createdAt' : IDL.Int,
+    'tableId' : IDL.Text, 'specialInstructions' : IDL.Text,
+    'tableName' : IDL.Text, 'items' : IDL.Vec(OrderItem),
   });
   const RestaurantSettings = IDL.Record({
-    'name' : IDL.Text,
-    'footerMessage' : IDL.Text,
-    'currency' : IDL.Text,
-    'address' : IDL.Text,
-    'phone' : IDL.Text,
-    'taxRate' : IDL.Float64,
+    'name' : IDL.Text, 'footerMessage' : IDL.Text, 'currency' : IDL.Text,
+    'address' : IDL.Text, 'phone' : IDL.Text, 'taxRate' : IDL.Float64,
   });
   const Customer = IDL.Record({
-    'id' : IDL.Text,
-    'name' : IDL.Text,
-    'phone' : IDL.Text,
-    'email' : IDL.Text,
-    'address' : IDL.Text,
-    'loyaltyPoints' : IDL.Nat,
-    'visitCount' : IDL.Nat,
-    'createdAt' : IDL.Int,
+    'id' : IDL.Text, 'name' : IDL.Text, 'phone' : IDL.Text, 'email' : IDL.Text,
+    'address' : IDL.Text, 'loyaltyPoints' : IDL.Nat, 'visitCount' : IDL.Nat, 'createdAt' : IDL.Int,
   });
   const InventoryItem = IDL.Record({
-    'id' : IDL.Text,
-    'name' : IDL.Text,
-    'category' : IDL.Text,
-    'quantity' : IDL.Float64,
-    'unit' : IDL.Text,
-    'reorderLevel' : IDL.Float64,
-    'costPrice' : IDL.Float64,
-    'updatedAt' : IDL.Int,
+    'id' : IDL.Text, 'name' : IDL.Text, 'category' : IDL.Text,
+    'quantity' : IDL.Float64, 'unit' : IDL.Text, 'reorderLevel' : IDL.Float64,
+    'costPrice' : IDL.Float64, 'updatedAt' : IDL.Int,
   });
   const Expense = IDL.Record({
-    'id' : IDL.Text,
-    'category' : IDL.Text,
-    'description' : IDL.Text,
-    'amount' : IDL.Float64,
-    'date' : IDL.Int,
-    'paidBy' : IDL.Text,
+    'id' : IDL.Text, 'category' : IDL.Text, 'description' : IDL.Text,
+    'amount' : IDL.Float64, 'date' : IDL.Int, 'paidBy' : IDL.Text,
   });
   const Vendor = IDL.Record({
-    'id' : IDL.Text,
-    'name' : IDL.Text,
-    'contactPerson' : IDL.Text,
-    'phone' : IDL.Text,
-    'email' : IDL.Text,
-    'address' : IDL.Text,
-    'category' : IDL.Text,
-    'balanceDue' : IDL.Float64,
-    'createdAt' : IDL.Int,
+    'id' : IDL.Text, 'name' : IDL.Text, 'contactPerson' : IDL.Text,
+    'phone' : IDL.Text, 'email' : IDL.Text, 'address' : IDL.Text,
+    'category' : IDL.Text, 'balanceDue' : IDL.Float64, 'createdAt' : IDL.Int,
   });
   const PurchaseItem = IDL.Record({
-    'name' : IDL.Text,
-    'quantity' : IDL.Float64,
-    'unit' : IDL.Text,
-    'unitPrice' : IDL.Float64,
-    'subtotal' : IDL.Float64,
+    'name' : IDL.Text, 'quantity' : IDL.Float64, 'unit' : IDL.Text,
+    'unitPrice' : IDL.Float64, 'subtotal' : IDL.Float64,
   });
   const Purchase = IDL.Record({
-    'id' : IDL.Text,
-    'vendorId' : IDL.Text,
-    'vendorName' : IDL.Text,
-    'items' : IDL.Vec(PurchaseItem),
-    'totalAmount' : IDL.Float64,
-    'date' : IDL.Int,
-    'paymentStatus' : IDL.Text,
-    'notes' : IDL.Text,
+    'id' : IDL.Text, 'vendorId' : IDL.Text, 'vendorName' : IDL.Text,
+    'items' : IDL.Vec(PurchaseItem), 'totalAmount' : IDL.Float64,
+    'date' : IDL.Int, 'paymentStatus' : IDL.Text, 'notes' : IDL.Text,
   });
 
   return IDL.Service({
-    'addMenuItem' : IDL.Func(
-        [IDL.Text, IDL.Text, IDL.Float64, IDL.Text],
-        [MenuItem],
-        [],
-      ),
+    'addMenuItem' : IDL.Func([IDL.Text, IDL.Text, IDL.Float64, IDL.Text], [MenuItem], []),
     'addTable' : IDL.Func([IDL.Text, IDL.Nat], [Table], []),
-    'createBill' : IDL.Func(
-        [
-          IDL.Text,
-          IDL.Text,
-          IDL.Text,
-          IDL.Vec(BillItem),
-          IDL.Float64,
-          IDL.Float64,
-          IDL.Float64,
-          IDL.Float64,
-          IDL.Text,
-          IDL.Text,
-          IDL.Text,
-        ],
-        [Bill],
-        [],
-      ),
-    'createOrder' : IDL.Func(
-        [IDL.Text, IDL.Text, IDL.Vec(OrderItem), IDL.Text],
-        [Order],
-        [],
-      ),
+    'createBill' : IDL.Func([IDL.Text,IDL.Text,IDL.Text,IDL.Vec(BillItem),IDL.Float64,IDL.Float64,IDL.Float64,IDL.Float64,IDL.Text,IDL.Text,IDL.Text],[Bill],[]),
+    'createOrder' : IDL.Func([IDL.Text, IDL.Text, IDL.Vec(OrderItem), IDL.Text], [Order], []),
     'deleteMenuItem' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'deleteTable' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'deleteBill' : IDL.Func([IDL.Text], [IDL.Bool], []),
@@ -365,11 +275,7 @@ export const idlFactory = ({ IDL }) => {
     'updateBill' : IDL.Func([Bill], [IDL.Opt(Bill)], []),
     'getDueBills' : IDL.Func([], [IDL.Vec(Bill)], ['query']),
     'updateMenuItem' : IDL.Func([MenuItem], [IDL.Opt(MenuItem)], []),
-    'updateOrderItems' : IDL.Func(
-        [IDL.Text, IDL.Vec(OrderItem)],
-        [IDL.Opt(Order)],
-        [],
-      ),
+    'updateOrderItems' : IDL.Func([IDL.Text, IDL.Vec(OrderItem)], [IDL.Opt(Order)], []),
     'updateOrderStatus' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Order)], []),
     'updateSettings' : IDL.Func([RestaurantSettings], [], []),
     'updateTableStatus' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Table)], []),
@@ -391,6 +297,25 @@ export const idlFactory = ({ IDL }) => {
     'addPurchase' : IDL.Func([IDL.Text, IDL.Text, IDL.Vec(PurchaseItem), IDL.Float64, IDL.Text, IDL.Text], [Purchase], []),
     'getPurchases' : IDL.Func([], [IDL.Vec(Purchase)], ['query']),
     'updatePurchaseStatus' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Purchase)], []),
+    'deletePurchase' : IDL.Func([IDL.Text], [IDL.Bool], []),
+    'resetBillCounter' : IDL.Func([], [], []),
+    // Restaurant-scoped
+    'getTablesR' : IDL.Func([IDL.Text], [IDL.Vec(Table)], ['query']),
+    'addTableR' : IDL.Func([IDL.Text, IDL.Text, IDL.Nat], [Table], []),
+    'deleteTableR' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+    'getMenuItemsR' : IDL.Func([IDL.Text], [IDL.Vec(MenuItem)], ['query']),
+    'addMenuItemR' : IDL.Func([IDL.Text, IDL.Text, IDL.Text, IDL.Float64, IDL.Text], [MenuItem], []),
+    'updateMenuItemR' : IDL.Func([IDL.Text, MenuItem], [IDL.Opt(MenuItem)], []),
+    'deleteMenuItemR' : IDL.Func([IDL.Text, IDL.Text], [IDL.Bool], []),
+    'getOrdersR' : IDL.Func([IDL.Text], [IDL.Vec(Order)], ['query']),
+    'getOrderByTableR' : IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(Order)], ['query']),
+    'createOrderR' : IDL.Func([IDL.Text, IDL.Text, IDL.Text, IDL.Vec(OrderItem), IDL.Text], [Order], []),
+    'updateOrderItemsR' : IDL.Func([IDL.Text, IDL.Text, IDL.Vec(OrderItem)], [IDL.Opt(Order)], []),
+    'updateOrderStatusR' : IDL.Func([IDL.Text, IDL.Text, IDL.Text], [IDL.Opt(Order)], []),
+    'getSettingsR' : IDL.Func([IDL.Text], [RestaurantSettings], ['query']),
+    'updateSettingsR' : IDL.Func([IDL.Text, RestaurantSettings], [], []),
+    'clearRestaurantBillsAndReset' : IDL.Func([IDL.Text], [IDL.Nat], []),
+    'createBillR' : IDL.Func([IDL.Text,IDL.Text,IDL.Text,IDL.Text,IDL.Vec(BillItem),IDL.Float64,IDL.Float64,IDL.Float64,IDL.Float64,IDL.Text,IDL.Text],[Bill],[]),
   });
 };
 

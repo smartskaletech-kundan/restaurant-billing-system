@@ -1,7 +1,17 @@
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
 import {
   AlertCircle,
   BarChart2,
+  Building2,
+  CalendarCheck,
   CalendarDays,
   ChefHat,
   ClipboardList,
@@ -24,13 +34,17 @@ import {
   Tag,
   Ticket,
   Truck,
+  UserCog,
   Users,
   UtensilsCrossed,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { RestaurantProvider, useRestaurant } from "./context/RestaurantContext";
+import { AdminPanel } from "./pages/AdminPanel";
 import { AttendancePayroll } from "./pages/AttendancePayroll";
+import { BanquetBilling } from "./pages/BanquetBilling";
+import { BanquetReservations } from "./pages/BanquetReservations";
 import { BillHistory } from "./pages/BillHistory";
 import { Billing } from "./pages/Billing";
 import { CouponManagement } from "./pages/CouponManagement";
@@ -54,6 +68,7 @@ import { RestaurantLogin } from "./pages/RestaurantLogin";
 import { RestaurantSetup } from "./pages/RestaurantSetup";
 import { Settings } from "./pages/Settings";
 import { TableManagement } from "./pages/TableManagement";
+import { UserManagement } from "./pages/UserManagement";
 import { Vendors } from "./pages/Vendors";
 import { WhatsAppIntegration } from "./pages/WhatsAppIntegration";
 import { ZomatoSwiggy } from "./pages/ZomatoSwiggy";
@@ -65,6 +80,8 @@ export type Page =
   | "kitchen"
   | "menu"
   | "billing"
+  | "banquet-billing"
+  | "banquet-reservations"
   | "history"
   | "settings"
   | "customers"
@@ -83,7 +100,8 @@ export type Page =
   | "coupon-management"
   | "attendance-payroll"
   | "whatsapp"
-  | "night-audit";
+  | "night-audit"
+  | "user-management";
 
 export interface SelectedTable {
   id: string;
@@ -100,6 +118,8 @@ interface NavItem {
   page: Page;
   label: string;
   Icon: LucideIcon;
+  permissionKey?: "billing" | "reports" | "menu" | "business";
+  adminOnly?: boolean;
 }
 
 interface NavSection {
@@ -112,32 +132,124 @@ const NAV_SECTIONS: NavSection[] = [
     title: null,
     items: [
       { page: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
-      { page: "tables", label: "Table Management", Icon: Grid3x3 },
-      { page: "orders", label: "Order Management", Icon: ClipboardList },
-      { page: "kitchen", label: "Kitchen Display", Icon: ChefHat },
-      { page: "menu", label: "Menu Management", Icon: UtensilsCrossed },
-      { page: "billing", label: "Billing", Icon: Receipt },
-      { page: "history", label: "Bill History", Icon: History },
+      {
+        page: "tables",
+        label: "Table Management",
+        Icon: Grid3x3,
+        permissionKey: "billing",
+      },
+      {
+        page: "orders",
+        label: "Order Management",
+        Icon: ClipboardList,
+        permissionKey: "billing",
+      },
+      {
+        page: "kitchen",
+        label: "Kitchen Display",
+        Icon: ChefHat,
+        permissionKey: "billing",
+      },
+      {
+        page: "menu",
+        label: "Menu Management",
+        Icon: UtensilsCrossed,
+        permissionKey: "menu",
+      },
+      {
+        page: "billing",
+        label: "Billing",
+        Icon: Receipt,
+        permissionKey: "billing",
+      },
+      {
+        page: "history",
+        label: "Bill History",
+        Icon: History,
+        permissionKey: "billing",
+      },
+      {
+        page: "banquet-billing",
+        label: "Banquet Billing",
+        Icon: Building2,
+        permissionKey: "billing",
+      },
+      {
+        page: "banquet-reservations",
+        label: "Banquet Reservations",
+        Icon: CalendarCheck,
+        permissionKey: "billing",
+      },
     ],
   },
   {
     title: "BUSINESS",
     items: [
-      { page: "customers", label: "Customers", Icon: Users },
-      { page: "inventory", label: "Inventory", Icon: Package },
-      { page: "expenses", label: "Expenses", Icon: CreditCard },
-      { page: "receipt-register", label: "Receipt Register", Icon: FileText },
-      { page: "due-management", label: "Due Management", Icon: AlertCircle },
-      { page: "vendors", label: "Vendors", Icon: Truck },
-      { page: "purchases", label: "Purchases", Icon: ShoppingCart },
-      { page: "night-audit", label: "Night Audit", Icon: Moon },
+      {
+        page: "customers",
+        label: "Customers",
+        Icon: Users,
+        permissionKey: "business",
+      },
+      {
+        page: "inventory",
+        label: "Inventory",
+        Icon: Package,
+        permissionKey: "menu",
+      },
+      {
+        page: "expenses",
+        label: "Expenses",
+        Icon: CreditCard,
+        permissionKey: "business",
+      },
+      {
+        page: "receipt-register",
+        label: "Receipt Register",
+        Icon: FileText,
+        permissionKey: "reports",
+      },
+      {
+        page: "due-management",
+        label: "Due Management",
+        Icon: AlertCircle,
+        permissionKey: "reports",
+      },
+      {
+        page: "vendors",
+        label: "Vendors",
+        Icon: Truck,
+        permissionKey: "business",
+      },
+      {
+        page: "purchases",
+        label: "Purchases",
+        Icon: ShoppingCart,
+        permissionKey: "business",
+      },
+      {
+        page: "night-audit",
+        label: "Night Audit",
+        Icon: Moon,
+        permissionKey: "reports",
+      },
     ],
   },
   {
     title: "ANALYTICS",
     items: [
-      { page: "reports", label: "Reports", Icon: BarChart2 },
-      { page: "gst-reports", label: "GST Reports", Icon: FileSpreadsheet },
+      {
+        page: "reports",
+        label: "Reports",
+        Icon: BarChart2,
+        permissionKey: "reports",
+      },
+      {
+        page: "gst-reports",
+        label: "GST Reports",
+        Icon: FileSpreadsheet,
+        permissionKey: "reports",
+      },
     ],
   },
   {
@@ -162,7 +274,15 @@ const NAV_SECTIONS: NavSection[] = [
   },
   {
     title: "SYSTEM",
-    items: [{ page: "whatsapp", label: "WhatsApp", Icon: MessageCircle }],
+    items: [
+      { page: "whatsapp", label: "WhatsApp", Icon: MessageCircle },
+      {
+        page: "user-management",
+        label: "User Management",
+        Icon: UserCog,
+        adminOnly: true,
+      },
+    ],
   },
 ];
 
@@ -170,6 +290,7 @@ const SETTINGS_NAV: NavItem = {
   page: "settings",
   label: "Settings",
   Icon: SettingsIcon,
+  adminOnly: true,
 };
 
 const ALL_ITEMS: NavItem[] = [
@@ -178,10 +299,11 @@ const ALL_ITEMS: NavItem[] = [
 ];
 
 function AppShell() {
-  const { restaurantId, restaurantName, isLoggedIn, isSetupComplete, logout } =
+  const { restaurantId, restaurantName, isLoggedIn, logout, currentUser } =
     useRestaurant();
   const [currentPage, setCurrentPage] = useState<Page>("dashboard");
   const [showSetup, setShowSetup] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [selectedTable, setSelectedTable] = useState<SelectedTable | null>(
     null,
   );
@@ -189,12 +311,24 @@ function AppShell() {
     null,
   );
 
+  const isOwner = currentUser === null;
+
+  // Show admin panel
+  if (showAdmin) {
+    return <AdminPanel onBack={() => setShowAdmin(false)} />;
+  }
+
   // Show setup or login page when not authenticated
-  if (!isSetupComplete || !isLoggedIn) {
-    if (showSetup || !isSetupComplete) {
+  if (!isLoggedIn) {
+    if (showSetup) {
       return <RestaurantSetup onLoginClick={() => setShowSetup(false)} />;
     }
-    return <RestaurantLogin onSetupClick={() => setShowSetup(true)} />;
+    return (
+      <RestaurantLogin
+        onSetupClick={() => setShowSetup(true)}
+        onAdminClick={() => setShowAdmin(true)}
+      />
+    );
   }
 
   const navigateTo = (
@@ -215,16 +349,28 @@ function AppShell() {
     }
   };
 
+  // Permission gate for nav items
+  const canSee = (item: NavItem): boolean => {
+    if (item.adminOnly && !isOwner) return false;
+    if (item.permissionKey && !isOwner) {
+      return currentUser?.permissions[item.permissionKey] === true;
+    }
+    return true;
+  };
+
   const activeLabel =
     ALL_ITEMS.find((n) => n.page === currentPage)?.label ?? "";
 
-  // Avatar initials from restaurantId
   const avatarInitials = restaurantId.slice(0, 2).toUpperCase() || "RS";
-  // Display name (truncate if long)
   const displayName =
     restaurantName.length > 18
       ? `${restaurantName.slice(0, 18)}\u2026`
       : restaurantName;
+
+  const userDisplayName = currentUser
+    ? currentUser.displayName
+    : restaurantName || "Admin";
+  const userRole = currentUser ? "Staff" : "Admin";
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -250,48 +396,54 @@ function AppShell() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-3 overflow-y-auto">
-          {NAV_SECTIONS.map((section) => (
-            <div key={section.title ?? "pos"} className="mb-1">
-              {section.title && (
-                <p className="text-white/40 text-xs font-semibold uppercase tracking-wider px-3 pt-4 pb-1">
-                  {section.title}
-                </p>
-              )}
-              {section.items.map(({ page, label, Icon }) => (
-                <button
-                  key={page}
-                  type="button"
-                  data-ocid={`nav.${page}.link`}
-                  onClick={() => navigateTo(page)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
-                    currentPage === page
-                      ? "bg-white/15 text-white font-medium"
-                      : "text-white/65 hover:bg-white/8 hover:text-white/90"
-                  }`}
-                >
-                  <Icon className="h-4 w-4 flex-shrink-0" />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          ))}
+          {NAV_SECTIONS.map((section) => {
+            const visibleItems = section.items.filter(canSee);
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={section.title ?? "pos"} className="mb-1">
+                {section.title && (
+                  <p className="text-white/40 text-xs font-semibold uppercase tracking-wider px-3 pt-4 pb-1">
+                    {section.title}
+                  </p>
+                )}
+                {visibleItems.map(({ page, label, Icon }) => (
+                  <button
+                    key={page}
+                    type="button"
+                    data-ocid={`nav.${page}.link`}
+                    onClick={() => navigateTo(page)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
+                      currentPage === page
+                        ? "bg-white/15 text-white font-medium"
+                        : "text-white/65 hover:bg-white/8 hover:text-white/90"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 flex-shrink-0" />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
 
-          {/* Settings at bottom of nav */}
-          <div className="border-t border-white/10 mt-2 pt-2">
-            <button
-              type="button"
-              data-ocid="nav.settings.link"
-              onClick={() => navigateTo("settings")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
-                currentPage === "settings"
-                  ? "bg-white/15 text-white font-medium"
-                  : "text-white/65 hover:bg-white/8 hover:text-white/90"
-              }`}
-            >
-              <SettingsIcon className="h-4 w-4 flex-shrink-0" />
-              <span>Settings</span>
-            </button>
-          </div>
+          {/* Settings at bottom of nav — admin only */}
+          {isOwner && (
+            <div className="border-t border-white/10 mt-2 pt-2">
+              <button
+                type="button"
+                data-ocid="nav.settings.link"
+                onClick={() => navigateTo("settings")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
+                  currentPage === "settings"
+                    ? "bg-white/15 text-white font-medium"
+                    : "text-white/65 hover:bg-white/8 hover:text-white/90"
+                }`}
+              >
+                <SettingsIcon className="h-4 w-4 flex-shrink-0" />
+                <span>Settings</span>
+              </button>
+            </div>
+          )}
         </nav>
 
         {/* Footer */}
@@ -327,17 +479,47 @@ function AppShell() {
             {activeLabel}
           </h1>
           <div className="flex items-center gap-3">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search..."
-                data-ocid="header.search_input"
-                className="bg-muted border border-border rounded-lg px-3 py-1.5 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-ring/40 placeholder:text-muted-foreground"
-              />
-            </div>
-            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-xs font-semibold">
-              {avatarInitials}
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                data-ocid="header.user_menu.button"
+                className="flex items-center gap-2 rounded-lg px-3 py-1.5 hover:bg-accent transition-colors"
+              >
+                <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-white text-xs font-semibold">
+                  {userDisplayName.slice(0, 2).toUpperCase()}
+                </div>
+                <div className="text-left">
+                  <p className="text-sm font-medium leading-none">
+                    {userDisplayName.length > 14
+                      ? `${userDisplayName.slice(0, 14)}…`
+                      : userDisplayName}
+                  </p>
+                </div>
+                <Badge
+                  variant={isOwner ? "default" : "secondary"}
+                  className="text-xs"
+                >
+                  {userRole}
+                </Badge>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  data-ocid="header.profile.link"
+                  onClick={() => navigateTo("user-management")}
+                >
+                  <UserCog className="h-4 w-4 mr-2" />
+                  My Profile / Change Password
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  data-ocid="header.logout.button"
+                  onClick={logout}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Logout
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
@@ -369,7 +551,9 @@ function AppShell() {
             />
           )}
           {currentPage === "history" && <BillHistory />}
-          {currentPage === "settings" && <Settings />}
+          {currentPage === "banquet-billing" && <BanquetBilling />}
+          {currentPage === "banquet-reservations" && <BanquetReservations />}
+          {currentPage === "settings" && isOwner && <Settings />}
           {currentPage === "customers" && <Customers />}
           {currentPage === "inventory" && <Inventory />}
           {currentPage === "expenses" && <Expenses />}
@@ -387,6 +571,7 @@ function AppShell() {
           {currentPage === "attendance-payroll" && <AttendancePayroll />}
           {currentPage === "whatsapp" && <WhatsAppIntegration />}
           {currentPage === "night-audit" && <NightAudit />}
+          {currentPage === "user-management" && <UserManagement />}
         </main>
       </div>
 

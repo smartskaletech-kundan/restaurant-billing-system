@@ -21,25 +21,28 @@ import { Pencil, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { MenuItem } from "../backend";
-import { useActor } from "../hooks/useActor";
-import { XLSX } from "../lib/xlsx-shim";
+import { useRestaurant } from "../context/RestaurantContext";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
+import { getXLSX } from "../lib/xlsx-shim";
 
-const CAT_STORAGE_KEY = "smartskale_menu_categories";
+function getCatKey(rid: string) {
+  return `${rid}_menu_categories`;
+}
 const DEFAULT_CATEGORIES = ["Starters", "Mains", "Beverages", "Desserts"];
 
-function loadCategories(): string[] {
+function loadCategories(rid: string): string[] {
   try {
-    const stored = localStorage.getItem(CAT_STORAGE_KEY);
+    const stored = localStorage.getItem(getCatKey(rid));
     if (stored) return JSON.parse(stored);
   } catch {
     // ignore
   }
-  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(DEFAULT_CATEGORIES));
+  localStorage.setItem(getCatKey(rid), JSON.stringify(DEFAULT_CATEGORIES));
   return DEFAULT_CATEGORIES;
 }
 
-function saveCategories(cats: string[]) {
-  localStorage.setItem(CAT_STORAGE_KEY, JSON.stringify(cats));
+function saveCategories(cats: string[], rid: string) {
+  localStorage.setItem(getCatKey(rid), JSON.stringify(cats));
 }
 
 const UNITS = [
@@ -53,18 +56,52 @@ const UNITS = [
   "full",
   "portion",
 ];
-const UNITS_STORAGE_KEY = "smartskale_menu_units";
+const GST_SLABS = ["0", "5", "12", "18", "28"];
 
-function loadUnitMap(): Record<string, string> {
+function getUnitsKey(rid: string) {
+  return `${rid}_menu_units`;
+}
+function getHSNKey(rid: string) {
+  return `${rid}_menu_hsn`;
+}
+function getTaxKey(rid: string) {
+  return `${rid}_menu_tax`;
+}
+
+function loadUnitMap(rid: string): Record<string, string> {
   try {
-    return JSON.parse(localStorage.getItem(UNITS_STORAGE_KEY) || "{}");
+    return JSON.parse(localStorage.getItem(getUnitsKey(rid)) || "{}");
   } catch {
     return {};
   }
 }
 
-function saveUnitMap(map: Record<string, string>) {
-  localStorage.setItem(UNITS_STORAGE_KEY, JSON.stringify(map));
+function saveUnitMap(map: Record<string, string>, rid: string) {
+  localStorage.setItem(getUnitsKey(rid), JSON.stringify(map));
+}
+
+function loadHsnMap(rid: string): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(getHSNKey(rid)) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveHsnMap(map: Record<string, string>, rid: string) {
+  localStorage.setItem(getHSNKey(rid), JSON.stringify(map));
+}
+
+function loadTaxMap(rid: string): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(getTaxKey(rid)) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveTaxMap(map: Record<string, string>, rid: string) {
+  localStorage.setItem(getTaxKey(rid), JSON.stringify(map));
 }
 
 const SAMPLE_ITEMS = [
@@ -131,13 +168,27 @@ type FormState = {
   description: string;
   available: boolean;
   unit: string;
+  hsn: string;
+  tax: string;
 };
 
 export function MenuManagement() {
   const { actor, isFetching } = useActor();
-  const [categories, setCategories] = useState<string[]>(loadCategories);
+  const { restaurantId } = useRestaurant();
+  const rid = restaurantId || "default";
+  const [categories, setCategories] = useState<string[]>(() =>
+    loadCategories(rid),
+  );
   const [items, setItems] = useState<MenuItem[]>([]);
-  const [unitMap, setUnitMap] = useState<Record<string, string>>(loadUnitMap);
+  const [unitMap, setUnitMap] = useState<Record<string, string>>(() =>
+    loadUnitMap(rid),
+  );
+  const [hsnMap, setHsnMap] = useState<Record<string, string>>(() =>
+    loadHsnMap(rid),
+  );
+  const [taxMap, setTaxMap] = useState<Record<string, string>>(() =>
+    loadTaxMap(rid),
+  );
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
@@ -148,6 +199,8 @@ export function MenuManagement() {
     description: "",
     available: true,
     unit: "plate",
+    hsn: "",
+    tax: "5",
   });
   const [saving, setSaving] = useState(false);
   const [seeded, setSeeded] = useState(false);
@@ -160,7 +213,7 @@ export function MenuManagement() {
 
   const updateCategories = (cats: string[]) => {
     setCategories(cats);
-    saveCategories(cats);
+    saveCategories(cats, rid);
   };
 
   const handleAddCategory = () => {
@@ -213,23 +266,29 @@ export function MenuManagement() {
       if (!actor) return;
       setLoading(true);
       try {
-        const result = await actor.getMenuItems();
+        const result = await actor.getMenuItemsR(restaurantId);
         setItems(result);
         if (result.length === 0 && !seeded && !skipSeed) {
           setSeeded(true);
           await Promise.all(
             SAMPLE_ITEMS.map((s) =>
-              actor.addMenuItem(s.category, s.name, s.price, s.description),
+              actor.addMenuItemR(
+                restaurantId,
+                s.category,
+                s.name,
+                s.price,
+                s.description,
+              ),
             ),
           );
-          const refreshed = await actor.getMenuItems();
+          const refreshed = await actor.getMenuItemsR(restaurantId);
           setItems(refreshed);
         }
       } finally {
         setLoading(false);
       }
     },
-    [actor, seeded],
+    [actor, seeded, restaurantId],
   );
 
   useEffect(() => {
@@ -246,6 +305,8 @@ export function MenuManagement() {
       description: "",
       available: true,
       unit: "plate",
+      hsn: "",
+      tax: "5",
     });
     setShowModal(true);
   };
@@ -259,6 +320,8 @@ export function MenuManagement() {
       description: item.description,
       available: item.available,
       unit: unitMap[item.id] ?? "plate",
+      hsn: hsnMap[item.id] ?? "",
+      tax: taxMap[item.id] ?? "5",
     });
     setShowModal(true);
   };
@@ -268,30 +331,43 @@ export function MenuManagement() {
     setSaving(true);
     try {
       if (editItem) {
-        await actor.updateMenuItem({
+        await actor.updateMenuItemR(restaurantId, {
           ...editItem,
           ...form,
           price: Number.parseFloat(form.price),
         });
-        const newMap = { ...unitMap, [editItem.id]: form.unit };
-        setUnitMap(newMap);
-        saveUnitMap(newMap);
+        const newUnitMap = { ...unitMap, [editItem.id]: form.unit };
+        const newHsnMap = { ...hsnMap, [editItem.id]: form.hsn };
+        const newTaxMap = { ...taxMap, [editItem.id]: form.tax };
+        setUnitMap(newUnitMap);
+        saveUnitMap(newUnitMap, rid);
+        setHsnMap(newHsnMap);
+        saveHsnMap(newHsnMap, rid);
+        setTaxMap(newTaxMap);
+        saveTaxMap(newTaxMap, rid);
         toast.success("Item updated");
       } else {
-        await actor.addMenuItem(
+        await actor.addMenuItemR(
+          restaurantId,
           form.category,
           form.name.trim(),
           Number.parseFloat(form.price),
           form.description,
         );
-        const refreshed = await actor.getMenuItems();
+        const refreshed = await actor.getMenuItemsR(restaurantId);
         const added = refreshed.find(
           (i) => i.name === form.name.trim() && i.category === form.category,
         );
         if (added) {
-          const newMap = { ...unitMap, [added.id]: form.unit };
-          setUnitMap(newMap);
-          saveUnitMap(newMap);
+          const newUnitMap = { ...unitMap, [added.id]: form.unit };
+          const newHsnMap = { ...hsnMap, [added.id]: form.hsn };
+          const newTaxMap = { ...taxMap, [added.id]: form.tax };
+          setUnitMap(newUnitMap);
+          saveUnitMap(newUnitMap, rid);
+          setHsnMap(newHsnMap);
+          saveHsnMap(newHsnMap, rid);
+          setTaxMap(newTaxMap);
+          saveTaxMap(newTaxMap, rid);
         }
         toast.success("Item added");
       }
@@ -308,11 +384,19 @@ export function MenuManagement() {
     if (!actor) return;
     if (!confirm(`Delete ${item.name}?`)) return;
     try {
-      await actor.deleteMenuItem(item.id);
-      const newMap = { ...unitMap };
-      delete newMap[item.id];
-      setUnitMap(newMap);
-      saveUnitMap(newMap);
+      await actor.deleteMenuItemR(restaurantId, item.id);
+      const newUnitMap = { ...unitMap };
+      delete newUnitMap[item.id];
+      setUnitMap(newUnitMap);
+      saveUnitMap(newUnitMap, rid);
+      const newHsnMap = { ...hsnMap };
+      delete newHsnMap[item.id];
+      setHsnMap(newHsnMap);
+      saveHsnMap(newHsnMap, rid);
+      const newTaxMap = { ...taxMap };
+      delete newTaxMap[item.id];
+      setTaxMap(newTaxMap);
+      saveTaxMap(newTaxMap, rid);
       toast.success("Item deleted");
       await load(true);
     } catch {
@@ -323,22 +407,28 @@ export function MenuManagement() {
   const handleToggleAvailable = async (item: MenuItem) => {
     if (!actor) return;
     try {
-      await actor.updateMenuItem({ ...item, available: !item.available });
+      await actor.updateMenuItemR(restaurantId, {
+        ...item,
+        available: !item.available,
+      });
       await load(true);
     } catch {
       toast.error("Failed to update item");
     }
   };
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await getXLSX();
     const ws = XLSX.utils.aoa_to_sheet([
-      ["name", "category", "price", "description", "unit"],
+      ["name", "category", "price", "description", "unit", "hsn", "tax"],
       [
         "Butter Chicken",
         "Mains",
         380,
         "Tender chicken in rich buttery tomato gravy",
         "plate",
+        "1905",
+        "5",
       ],
     ]);
     const wb = XLSX.utils.book_new();
@@ -347,6 +437,7 @@ export function MenuManagement() {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const XLSX = await getXLSX();
     if (!actor) return;
     const file = e.target.files?.[0];
     if (!file) return;
@@ -360,28 +451,53 @@ export function MenuManagement() {
     }
     let count = 0;
     const newUnitMap = { ...unitMap };
+    const newHsnMap = { ...hsnMap };
+    const newTaxMap = { ...taxMap };
     try {
       for (const row of rows) {
-        const name = (row.name || "").toString().trim();
-        const category = (row.category || "Mains").toString().trim();
-        const price = Number(row.price) || 0;
-        const description = (row.description || "").toString().trim();
-        const unit = (row.unit || "plate").toString().trim();
+        const r = row as Record<string, unknown>;
+        const name = (r.name || "").toString().trim();
+        const category = (r.category || "Mains").toString().trim();
+        const price = Number(r.price) || 0;
+        const description = (r.description || "").toString().trim();
+        const unit = (r.unit || "plate").toString().trim();
+        const hsn = (r.hsn || "").toString().trim();
+        const tax = (r.tax || "5").toString().trim();
         if (!name) continue;
-        await actor.addMenuItem(category, name, price, description);
+        await actor.addMenuItemR(
+          restaurantId,
+          category,
+          name,
+          price,
+          description,
+        );
         count++;
         newUnitMap[`_pending_${name}`] = unit;
+        newHsnMap[`_pending_${name}`] = hsn;
+        newTaxMap[`_pending_${name}`] = tax;
       }
-      const refreshed = await actor.getMenuItems();
+      const refreshed = await actor.getMenuItemsR(restaurantId);
       for (const item of refreshed) {
         const pendingKey = `_pending_${item.name}`;
         if (newUnitMap[pendingKey] && !unitMap[item.id]) {
           newUnitMap[item.id] = newUnitMap[pendingKey];
           delete newUnitMap[pendingKey];
         }
+        if (newHsnMap[pendingKey] !== undefined && !hsnMap[item.id]) {
+          newHsnMap[item.id] = newHsnMap[pendingKey];
+          delete newHsnMap[pendingKey];
+        }
+        if (newTaxMap[pendingKey] !== undefined && !taxMap[item.id]) {
+          newTaxMap[item.id] = newTaxMap[pendingKey];
+          delete newTaxMap[pendingKey];
+        }
       }
       setUnitMap(newUnitMap);
-      saveUnitMap(newUnitMap);
+      saveUnitMap(newUnitMap, rid);
+      setHsnMap(newHsnMap);
+      saveHsnMap(newHsnMap, rid);
+      setTaxMap(newTaxMap);
+      saveTaxMap(newTaxMap, rid);
       setItems(refreshed);
       toast.success(`Imported ${count} items successfully`);
     } catch {
@@ -498,8 +614,25 @@ export function MenuManagement() {
                         {item.description}
                       </p>
                     )}
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {unitMap[item.id] && (
+                        <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full">
+                          Unit: {unitMap[item.id]}
+                        </span>
+                      )}
+                      {hsnMap[item.id] && (
+                        <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full">
+                          HSN: {hsnMap[item.id]}
+                        </span>
+                      )}
+                      {taxMap[item.id] && (
+                        <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-2 py-0.5 rounded-full">
+                          GST: {taxMap[item.id]}%
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <span className="font-semibold text-foreground">
+                  <span className="font-semibold text-foreground whitespace-nowrap">
                     ₹{item.price.toFixed(2)}
                     {unitMap[item.id] && (
                       <span className="text-xs text-muted-foreground font-normal ml-1">
@@ -604,6 +737,38 @@ export function MenuManagement() {
                     {UNITS.map((u) => (
                       <SelectItem key={u} value={u}>
                         {u}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>HSN Code</Label>
+                <Input
+                  data-ocid="menu.hsn.input"
+                  className="h-9"
+                  value={form.hsn}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, hsn: e.target.value }))
+                  }
+                  placeholder="e.g. 1905"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Tax / GST %</Label>
+                <Select
+                  value={form.tax}
+                  onValueChange={(v) => setForm((f) => ({ ...f, tax: v }))}
+                >
+                  <SelectTrigger className="h-9" data-ocid="menu.tax.select">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GST_SLABS.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}%
                       </SelectItem>
                     ))}
                   </SelectContent>

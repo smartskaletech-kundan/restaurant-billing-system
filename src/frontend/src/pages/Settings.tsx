@@ -11,12 +11,12 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Info, Lock } from "lucide-react";
+import { Info, Lock, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { RestaurantSettings } from "../backend";
 import { useRestaurant } from "../context/RestaurantContext";
-import { useActor } from "../hooks/useActor";
+import { useActorExtended as useActor } from "../hooks/useActorExtended";
 
 const DEFAULT_SETTINGS: RestaurantSettings = {
   name: "Spice Garden Restaurant",
@@ -53,6 +53,8 @@ export function Settings() {
   const [card1Name, setCard1Name] = useState("HDFC Card");
   const [card2Name, setCard2Name] = useState("SBI Card");
   const [ownerWhatsAppNumber, setOwnerWhatsAppNumber] = useState("");
+  const [invoicePrefix, setInvoicePrefix] = useState("INV");
+  const [banquetPrefix, setBanquetPrefix] = useState("BANQ");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -75,6 +77,12 @@ export function Settings() {
       setCard2Name(localStorage.getItem(card2Key) || "SBI Card");
       setOwnerWhatsAppNumber(
         localStorage.getItem(`${restaurantId}_owner_whatsapp_number`) || "",
+      );
+      setInvoicePrefix(
+        localStorage.getItem(`${restaurantId}_invoice_prefix`) || "INV",
+      );
+      setBanquetPrefix(
+        localStorage.getItem(`${restaurantId}_banquet_prefix`) || "BANQ",
       );
       const lsSms = localStorage.getItem(`${restaurantId}_sms_config`);
       if (lsSms) {
@@ -122,7 +130,7 @@ export function Settings() {
     }
 
     setLoading(true);
-    Promise.all([actor.getSettings().catch(() => null)])
+    Promise.all([actor.getSettingsR(restaurantId).catch(() => null)])
       .then(([s]) => {
         if (s?.name) setForm(s);
       })
@@ -163,6 +171,9 @@ export function Settings() {
         ownerWhatsAppNumber,
       );
 
+      // Notify same-tab listeners about card name change
+      window.dispatchEvent(new Event("cardNamesUpdated"));
+
       // Show success immediately
       setSaveSuccess(true);
       toast.success("Settings saved successfully!");
@@ -170,7 +181,7 @@ export function Settings() {
 
       // Attempt backend save in background (best-effort, non-blocking)
       if (actor) {
-        actor.updateSettings(form).catch((err) => {
+        actor.updateSettingsR(restaurantId, form).catch((err) => {
           console.log("Background settings sync failed (non-critical):", err);
         });
       }
@@ -407,6 +418,68 @@ export function Settings() {
         {saving ? "Saving..." : "💾 Save Settings"}
       </Button>
 
+      {/* Invoice Series */}
+      <div className="bg-card border border-border rounded-xl p-6 shadow-card space-y-4">
+        <h3 className="font-semibold text-foreground border-b border-border pb-3">
+          🧾 Invoice Series
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Set custom prefixes for your bill invoice numbers. Changes apply to
+          new bills only.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <Label>Restaurant Bill Prefix</Label>
+            <Input
+              data-ocid="settings.invoice_prefix.input"
+              value={invoicePrefix}
+              maxLength={8}
+              onChange={(e) =>
+                setInvoicePrefix(
+                  e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+                )
+              }
+              placeholder="INV"
+            />
+            <p className="text-xs text-muted-foreground">
+              e.g. INV → INV/2025-26/001
+            </p>
+          </div>
+          <div className="space-y-1">
+            <Label>Banquet Bill Prefix</Label>
+            <Input
+              data-ocid="settings.banquet_prefix.input"
+              value={banquetPrefix}
+              maxLength={8}
+              onChange={(e) =>
+                setBanquetPrefix(
+                  e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+                )
+              }
+              placeholder="BANQ"
+            />
+            <p className="text-xs text-muted-foreground">
+              e.g. BANQ → BANQ/2025-26/001
+            </p>
+          </div>
+        </div>
+        <Button
+          data-ocid="settings.invoice_series.save_button"
+          onClick={() => {
+            const pfx = invoicePrefix.trim() || "INV";
+            const bpfx = banquetPrefix.trim() || "BANQ";
+            localStorage.setItem(`${restaurantId}_invoice_prefix`, pfx);
+            localStorage.setItem(`${restaurantId}_banquet_prefix`, bpfx);
+            setInvoicePrefix(pfx);
+            setBanquetPrefix(bpfx);
+            toast.success("Invoice settings saved!");
+          }}
+          variant="outline"
+        >
+          💾 Save Invoice Settings
+        </Button>
+      </div>
+
       {/* SMS / WhatsApp Gateway */}
       <div className="bg-card border border-border rounded-xl p-6 shadow-card space-y-5">
         <h3 className="font-semibold text-foreground border-b border-border pb-3">
@@ -562,6 +635,396 @@ export function Settings() {
           {smsSaving ? "Saving..." : "💾 Save Gateway Settings"}
         </Button>
       </div>
+
+      <BanquetHallsMenuSettings restaurantId={restaurantId} />
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Banquet Halls & Menu Settings sub-component
+// ──────────────────────────────────────────────
+
+interface BanquetHall {
+  id: string;
+  name: string;
+  defaultCharge: number;
+}
+
+interface BanquetMenuItemBase {
+  id: string;
+  name: string;
+  rate: number;
+}
+
+interface BanquetMenuItem extends BanquetMenuItemBase {
+  type: "veg" | "nonveg";
+}
+
+const DEFAULT_BANQUET_HALLS: BanquetHall[] = [
+  { id: "hall-1", name: "Main Banquet Hall", defaultCharge: 0 },
+  { id: "hall-2", name: "Garden Lawn", defaultCharge: 0 },
+  { id: "hall-3", name: "Rooftop Terrace", defaultCharge: 0 },
+  { id: "hall-4", name: "Conference Room", defaultCharge: 0 },
+  { id: "hall-5", name: "Private Dining Room", defaultCharge: 0 },
+];
+
+const DEFAULT_BANQUET_VEG: BanquetMenuItemBase[] = [
+  { id: "bv-1", name: "Veg Starter Platter", rate: 250 },
+  { id: "bv-2", name: "Paneer Tikka", rate: 180 },
+  { id: "bv-3", name: "Veg Biryani", rate: 220 },
+  { id: "bv-4", name: "Dal Makhani", rate: 120 },
+  { id: "bv-5", name: "Shahi Paneer", rate: 160 },
+  { id: "bv-6", name: "Mix Veg Curry", rate: 130 },
+  { id: "bv-7", name: "Steamed Rice", rate: 80 },
+  { id: "bv-8", name: "Butter Naan", rate: 60 },
+  { id: "bv-9", name: "Veg Soup", rate: 90 },
+  { id: "bv-10", name: "Veg Welcome Drink", rate: 50 },
+];
+
+const DEFAULT_BANQUET_NON_VEG: BanquetMenuItemBase[] = [
+  { id: "bnv-1", name: "Non-Veg Starter Platter", rate: 350 },
+  { id: "bnv-2", name: "Chicken Tikka", rate: 280 },
+  { id: "bnv-3", name: "Mutton Seekh Kebab", rate: 320 },
+  { id: "bnv-4", name: "Chicken Biryani", rate: 300 },
+  { id: "bnv-5", name: "Mutton Curry", rate: 350 },
+  { id: "bnv-6", name: "Fish Fry", rate: 280 },
+  { id: "bnv-7", name: "Egg Curry", rate: 150 },
+  { id: "bnv-8", name: "Chicken Soup", rate: 120 },
+  { id: "bnv-9", name: "Non-Veg Welcome Drink", rate: 70 },
+];
+
+function loadBanquetHalls(restaurantId: string): BanquetHall[] {
+  try {
+    const raw = localStorage.getItem(`${restaurantId}_banquet_halls`);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_BANQUET_HALLS;
+}
+
+function loadBanquetMenuItems(restaurantId: string): BanquetMenuItem[] {
+  let vegItems: BanquetMenuItemBase[] = DEFAULT_BANQUET_VEG;
+  let nonVegItems: BanquetMenuItemBase[] = DEFAULT_BANQUET_NON_VEG;
+  try {
+    const rawVeg = localStorage.getItem(`${restaurantId}_banquet_veg_menu`);
+    if (rawVeg) vegItems = JSON.parse(rawVeg);
+  } catch {
+    /* ignore */
+  }
+  try {
+    const rawNonVeg = localStorage.getItem(
+      `${restaurantId}_banquet_nonveg_menu`,
+    );
+    if (rawNonVeg) nonVegItems = JSON.parse(rawNonVeg);
+  } catch {
+    /* ignore */
+  }
+  return [
+    ...vegItems.map((i) => ({ ...i, type: "veg" as const })),
+    ...nonVegItems.map((i) => ({ ...i, type: "nonveg" as const })),
+  ];
+}
+
+function BanquetHallsMenuSettings({ restaurantId }: { restaurantId: string }) {
+  const [halls, setHalls] = useState<BanquetHall[]>(() =>
+    loadBanquetHalls(restaurantId),
+  );
+  const [menuItems, setMenuItems] = useState<BanquetMenuItem[]>(() =>
+    loadBanquetMenuItems(restaurantId),
+  );
+
+  function addHall() {
+    setHalls((prev) => [
+      ...prev,
+      { id: `hall-${Date.now()}`, name: "", defaultCharge: 0 },
+    ]);
+  }
+
+  function updateHall(
+    id: string,
+    field: "name" | "defaultCharge",
+    value: string | number,
+  ) {
+    setHalls((prev) =>
+      prev.map((h) => (h.id === id ? { ...h, [field]: value } : h)),
+    );
+  }
+
+  function removeHall(id: string) {
+    setHalls((prev) => prev.filter((h) => h.id !== id));
+  }
+
+  function addMenuItem() {
+    setMenuItems((prev) => [
+      ...prev,
+      { id: `bm-${Date.now()}`, name: "", rate: 0, type: "veg" },
+    ]);
+  }
+
+  function updateMenuItem(
+    id: string,
+    field: "name" | "rate" | "type",
+    value: string | number,
+  ) {
+    setMenuItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, [field]: value } : i)),
+    );
+  }
+
+  function removeMenuItem(id: string) {
+    setMenuItems((prev) => prev.filter((i) => i.id !== id));
+  }
+
+  function handleSaveBanquetSettings() {
+    localStorage.setItem(
+      `${restaurantId}_banquet_halls`,
+      JSON.stringify(halls),
+    );
+    // Split back and save to separate keys for BanquetBilling.tsx compatibility
+    const vegItems = menuItems
+      .filter((i) => i.type === "veg")
+      .map(({ id, name, rate }) => ({ id, name, rate }));
+    const nonVegItems = menuItems
+      .filter((i) => i.type === "nonveg")
+      .map(({ id, name, rate }) => ({ id, name, rate }));
+    localStorage.setItem(
+      `${restaurantId}_banquet_veg_menu`,
+      JSON.stringify(vegItems),
+    );
+    localStorage.setItem(
+      `${restaurantId}_banquet_nonveg_menu`,
+      JSON.stringify(nonVegItems),
+    );
+    toast.success("Banquet settings saved!");
+  }
+
+  const vegItems = menuItems.filter((i) => i.type === "veg");
+  const nonVegItems = menuItems.filter((i) => i.type === "nonveg");
+
+  return (
+    <div className="rounded-xl border bg-card text-card-foreground shadow-sm p-6 space-y-6">
+      <div className="flex items-center gap-2">
+        <span className="text-xl">🏛️</span>
+        <h2 className="text-lg font-semibold">
+          Banquet Halls &amp; Menu Settings
+        </h2>
+      </div>
+
+      {/* Halls */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-medium text-base">Halls / Venues</h3>
+          <button
+            type="button"
+            data-ocid="settings.banquet_hall.button"
+            onClick={addHall}
+            className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded-lg border border-primary text-primary hover:bg-primary/10 transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Hall
+          </button>
+        </div>
+        <div className="space-y-2">
+          {halls.map((hall, idx) => (
+            <div
+              key={hall.id}
+              className="flex items-center gap-2"
+              data-ocid={`settings.banquet_hall.item.${idx + 1}`}
+            >
+              <Input
+                placeholder="Hall / Venue Name"
+                value={hall.name}
+                onChange={(e) => updateHall(hall.id, "name", e.target.value)}
+                className="flex-1 h-9"
+              />
+              <Input
+                type="number"
+                min={0}
+                placeholder="Default Charge (₹)"
+                value={hall.defaultCharge || ""}
+                onChange={(e) =>
+                  updateHall(hall.id, "defaultCharge", Number(e.target.value))
+                }
+                className="w-40 h-9"
+              />
+              <button
+                type="button"
+                data-ocid={`settings.banquet_hall.delete_button.${idx + 1}`}
+                onClick={() => removeHall(hall.id)}
+                className="text-destructive hover:bg-destructive/10 rounded p-1.5 transition-colors"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t" />
+
+      {/* Unified Menu Items */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-medium text-base">🍽️ Banquet Menu Items</h3>
+          <button
+            type="button"
+            data-ocid="settings.banquet_menu.button"
+            onClick={addMenuItem}
+            className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded-lg border border-primary text-primary hover:bg-primary/10 transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Menu Item
+          </button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Add items and toggle between 🟢 Veg and 🔴 Non-Veg. Items are grouped
+          by type below.
+        </p>
+
+        {/* Veg Section */}
+        {vegItems.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-green-700">
+                🥗 Veg Menu Items ({vegItems.length})
+              </span>
+              <div className="flex-1 h-px bg-green-200" />
+            </div>
+            {vegItems.map((item, idx) => (
+              <div
+                key={item.id}
+                className="flex items-center gap-2 p-2 rounded-lg bg-green-50/50 border border-green-100"
+                data-ocid={`settings.banquet_veg.item.${idx + 1}`}
+              >
+                <Input
+                  placeholder="Item Name"
+                  value={item.name}
+                  onChange={(e) =>
+                    updateMenuItem(item.id, "name", e.target.value)
+                  }
+                  className="flex-1 h-9"
+                />
+                <Input
+                  type="number"
+                  min={0}
+                  placeholder="₹/head"
+                  value={item.rate || ""}
+                  onChange={(e) =>
+                    updateMenuItem(item.id, "rate", Number(e.target.value))
+                  }
+                  className="w-28 h-9"
+                />
+                {/* Type toggle buttons */}
+                <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => updateMenuItem(item.id, "type", "veg")}
+                    className="px-2.5 py-1.5 text-xs font-medium bg-green-500 text-white transition-colors"
+                  >
+                    🟢 Veg
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateMenuItem(item.id, "type", "nonveg")}
+                    className="px-2.5 py-1.5 text-xs font-medium bg-muted text-muted-foreground hover:bg-red-50 hover:text-red-700 transition-colors"
+                  >
+                    🔴 Non-Veg
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  data-ocid={`settings.banquet_veg.delete_button.${idx + 1}`}
+                  onClick={() => removeMenuItem(item.id)}
+                  className="text-destructive hover:bg-destructive/10 rounded p-1.5 transition-colors shrink-0"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Non-Veg Section */}
+        {nonVegItems.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-red-700">
+                🍗 Non-Veg Menu Items ({nonVegItems.length})
+              </span>
+              <div className="flex-1 h-px bg-red-200" />
+            </div>
+            {nonVegItems.map((item, idx) => (
+              <div
+                key={item.id}
+                className="flex items-center gap-2 p-2 rounded-lg bg-red-50/50 border border-red-100"
+                data-ocid={`settings.banquet_nonveg.item.${idx + 1}`}
+              >
+                <Input
+                  placeholder="Item Name"
+                  value={item.name}
+                  onChange={(e) =>
+                    updateMenuItem(item.id, "name", e.target.value)
+                  }
+                  className="flex-1 h-9"
+                />
+                <Input
+                  type="number"
+                  min={0}
+                  placeholder="₹/head"
+                  value={item.rate || ""}
+                  onChange={(e) =>
+                    updateMenuItem(item.id, "rate", Number(e.target.value))
+                  }
+                  className="w-28 h-9"
+                />
+                {/* Type toggle buttons */}
+                <div className="flex rounded-lg overflow-hidden border border-border shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => updateMenuItem(item.id, "type", "veg")}
+                    className="px-2.5 py-1.5 text-xs font-medium bg-muted text-muted-foreground hover:bg-green-50 hover:text-green-700 transition-colors"
+                  >
+                    🟢 Veg
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateMenuItem(item.id, "type", "nonveg")}
+                    className="px-2.5 py-1.5 text-xs font-medium bg-red-500 text-white transition-colors"
+                  >
+                    🔴 Non-Veg
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  data-ocid={`settings.banquet_nonveg.delete_button.${idx + 1}`}
+                  onClick={() => removeMenuItem(item.id)}
+                  className="text-destructive hover:bg-destructive/10 rounded p-1.5 transition-colors shrink-0"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {menuItems.length === 0 && (
+          <div
+            className="text-center py-8 text-muted-foreground text-sm border border-dashed rounded-lg"
+            data-ocid="settings.banquet_menu.empty_state"
+          >
+            No menu items yet. Click &quot;Add Menu Item&quot; to get started.
+          </div>
+        )}
+      </div>
+
+      <Button
+        data-ocid="settings.banquet.save_button"
+        onClick={handleSaveBanquetSettings}
+        className="w-full"
+      >
+        💾 Save Banquet Settings
+      </Button>
     </div>
   );
 }

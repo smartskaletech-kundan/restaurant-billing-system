@@ -20,9 +20,10 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { XLSX } from "../lib/xlsx-shim";
+import { useRestaurant } from "../context/RestaurantContext";
+import { getXLSX } from "../lib/xlsx-shim";
 
 type AttendanceStatus = "P" | "A" | "H";
 type PayrollStatus = "Pending" | "Paid";
@@ -179,7 +180,11 @@ function initPayrollEntries(): PayrollEntry[] {
   });
 }
 
-function getRestaurantName(): string {
+function getRestaurantName(restaurantId?: string): string {
+  if (restaurantId) {
+    const name = localStorage.getItem(`${restaurantId}_settings_name`);
+    if (name) return name;
+  }
   try {
     const raw = localStorage.getItem("restaurantSettings");
     if (raw) {
@@ -193,6 +198,7 @@ function getRestaurantName(): string {
 }
 
 export default function AttendancePayroll() {
+  const { restaurantId } = useRestaurant();
   const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
   const [attendance, setAttendance] =
     useState<Record<number, Record<number, AttendanceStatus>>>(
@@ -208,7 +214,10 @@ export default function AttendancePayroll() {
   const [advanceDeductions, setAdvanceDeductions] = useState<
     Record<number, number>
   >(Object.fromEntries(INITIAL_EMPLOYEES.map((e) => [e.id, e.advance])));
-  const [selectedMonth] = useState("2026-03");
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   const [newEmp, setNewEmp] = useState({
     name: "",
     role: "",
@@ -227,6 +236,36 @@ export default function AttendancePayroll() {
   const [payrollEntries, setPayrollEntries] =
     useState<PayrollEntry[]>(initPayrollEntries);
   const importRef = useRef<HTMLInputElement>(null);
+
+  // Load persisted employees on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(`${restaurantId}_employees`);
+    if (saved) {
+      try {
+        setEmployees(JSON.parse(saved));
+      } catch {}
+    }
+  }, [restaurantId]);
+
+  // Load persisted payroll entries on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(`${restaurantId}_payroll_entries`);
+    if (saved) {
+      try {
+        setPayrollEntries(JSON.parse(saved));
+      } catch {}
+    }
+  }, [restaurantId]);
+
+  // Save employees whenever they change
+  useEffect(() => {
+    if (restaurantId) {
+      localStorage.setItem(
+        `${restaurantId}_employees`,
+        JSON.stringify(employees),
+      );
+    }
+  }, [employees, restaurantId]);
 
   // Filtered lists
   const filteredEmployees = employees.filter(
@@ -282,6 +321,10 @@ export default function AttendancePayroll() {
   }
 
   function saveRow(entry: PayrollEntry) {
+    localStorage.setItem(
+      `${restaurantId}_payroll_entries`,
+      JSON.stringify(payrollEntries),
+    );
     toast.success(`${entry.empName || "Row"} saved`);
   }
 
@@ -298,10 +341,15 @@ export default function AttendancePayroll() {
   }
 
   function saveAll() {
+    localStorage.setItem(
+      `${restaurantId}_payroll_entries`,
+      JSON.stringify(payrollEntries),
+    );
     toast.success("All payroll entries saved");
   }
 
-  function exportExcel() {
+  async function exportExcel() {
+    const XLSX = await getXLSX();
     const headers = [
       "Employee Name",
       "Role",
@@ -331,7 +379,8 @@ export default function AttendancePayroll() {
     toast.success("Exported to Excel");
   }
 
-  function importExcel(e: React.ChangeEvent<HTMLInputElement>) {
+  async function importExcel(e: React.ChangeEvent<HTMLInputElement>) {
+    const XLSX = await getXLSX();
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -754,6 +803,12 @@ export default function AttendancePayroll() {
 
           <div className="flex justify-between items-center">
             <h2 className="font-semibold">Payroll — {selectedMonth}</h2>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="h-9 border border-border rounded px-2 text-sm bg-background text-foreground"
+            />
             <Button
               onClick={() => {
                 setPayrollStatus((prev) =>
@@ -1219,7 +1274,7 @@ export default function AttendancePayroll() {
               {/* Header */}
               <div className="text-center border-b pb-3">
                 <p className="text-lg font-bold text-foreground">
-                  {getRestaurantName()}
+                  {getRestaurantName(restaurantId)}
                 </p>
                 <p className="text-base font-semibold text-muted-foreground tracking-widest uppercase">
                   PAYSLIP
