@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { MenuItem } from "../backend";
@@ -67,6 +67,9 @@ function getHSNKey(rid: string) {
 function getTaxKey(rid: string) {
   return `${rid}_menu_tax`;
 }
+function getItemCodeKey(rid: string) {
+  return `${rid}_menu_itemcode`;
+}
 
 function loadUnitMap(rid: string): Record<string, string> {
   try {
@@ -75,11 +78,9 @@ function loadUnitMap(rid: string): Record<string, string> {
     return {};
   }
 }
-
 function saveUnitMap(map: Record<string, string>, rid: string) {
   localStorage.setItem(getUnitsKey(rid), JSON.stringify(map));
 }
-
 function loadHsnMap(rid: string): Record<string, string> {
   try {
     return JSON.parse(localStorage.getItem(getHSNKey(rid)) || "{}");
@@ -87,11 +88,9 @@ function loadHsnMap(rid: string): Record<string, string> {
     return {};
   }
 }
-
 function saveHsnMap(map: Record<string, string>, rid: string) {
   localStorage.setItem(getHSNKey(rid), JSON.stringify(map));
 }
-
 function loadTaxMap(rid: string): Record<string, string> {
   try {
     return JSON.parse(localStorage.getItem(getTaxKey(rid)) || "{}");
@@ -99,9 +98,18 @@ function loadTaxMap(rid: string): Record<string, string> {
     return {};
   }
 }
-
 function saveTaxMap(map: Record<string, string>, rid: string) {
   localStorage.setItem(getTaxKey(rid), JSON.stringify(map));
+}
+function loadItemCodeMap(rid: string): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(getItemCodeKey(rid)) || "{}");
+  } catch {
+    return {};
+  }
+}
+function saveItemCodeMap(map: Record<string, string>, rid: string) {
+  localStorage.setItem(getItemCodeKey(rid), JSON.stringify(map));
 }
 
 const SAMPLE_ITEMS = [
@@ -170,6 +178,7 @@ type FormState = {
   unit: string;
   hsn: string;
   tax: string;
+  itemCode: string;
 };
 
 export function MenuManagement() {
@@ -189,9 +198,16 @@ export function MenuManagement() {
   const [taxMap, setTaxMap] = useState<Record<string, string>>(() =>
     loadTaxMap(rid),
   );
+  const [itemCodeMap, setItemCodeMap] = useState<Record<string, string>>(() =>
+    loadItemCodeMap(rid),
+  );
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState<
+    "all" | "active" | "inactive"
+  >("all");
   const [form, setForm] = useState<FormState>({
     category: categories[0] ?? "Starters",
     name: "",
@@ -201,6 +217,7 @@ export function MenuManagement() {
     unit: "plate",
     hsn: "",
     tax: "5",
+    itemCode: "",
   });
   const [saving, setSaving] = useState(false);
   const [seeded, setSeeded] = useState(false);
@@ -307,6 +324,7 @@ export function MenuManagement() {
       unit: "plate",
       hsn: "",
       tax: "5",
+      itemCode: "",
     });
     setShowModal(true);
   };
@@ -322,6 +340,7 @@ export function MenuManagement() {
       unit: unitMap[item.id] ?? "plate",
       hsn: hsnMap[item.id] ?? "",
       tax: taxMap[item.id] ?? "5",
+      itemCode: itemCodeMap[item.id] ?? "",
     });
     setShowModal(true);
   };
@@ -339,12 +358,15 @@ export function MenuManagement() {
         const newUnitMap = { ...unitMap, [editItem.id]: form.unit };
         const newHsnMap = { ...hsnMap, [editItem.id]: form.hsn };
         const newTaxMap = { ...taxMap, [editItem.id]: form.tax };
+        const newItemCodeMap = { ...itemCodeMap, [editItem.id]: form.itemCode };
         setUnitMap(newUnitMap);
         saveUnitMap(newUnitMap, rid);
         setHsnMap(newHsnMap);
         saveHsnMap(newHsnMap, rid);
         setTaxMap(newTaxMap);
         saveTaxMap(newTaxMap, rid);
+        setItemCodeMap(newItemCodeMap);
+        saveItemCodeMap(newItemCodeMap, rid);
         toast.success("Item updated");
       } else {
         await actor.addMenuItemR(
@@ -362,12 +384,15 @@ export function MenuManagement() {
           const newUnitMap = { ...unitMap, [added.id]: form.unit };
           const newHsnMap = { ...hsnMap, [added.id]: form.hsn };
           const newTaxMap = { ...taxMap, [added.id]: form.tax };
+          const newItemCodeMap = { ...itemCodeMap, [added.id]: form.itemCode };
           setUnitMap(newUnitMap);
           saveUnitMap(newUnitMap, rid);
           setHsnMap(newHsnMap);
           saveHsnMap(newHsnMap, rid);
           setTaxMap(newTaxMap);
           saveTaxMap(newTaxMap, rid);
+          setItemCodeMap(newItemCodeMap);
+          saveItemCodeMap(newItemCodeMap, rid);
         }
         toast.success("Item added");
       }
@@ -397,6 +422,10 @@ export function MenuManagement() {
       delete newTaxMap[item.id];
       setTaxMap(newTaxMap);
       saveTaxMap(newTaxMap, rid);
+      const newItemCodeMap = { ...itemCodeMap };
+      delete newItemCodeMap[item.id];
+      setItemCodeMap(newItemCodeMap);
+      saveItemCodeMap(newItemCodeMap, rid);
       toast.success("Item deleted");
       await load(true);
     } catch {
@@ -411,6 +440,7 @@ export function MenuManagement() {
         ...item,
         available: !item.available,
       });
+      toast.success(item.available ? "Item deactivated" : "Item activated");
       await load(true);
     } catch {
       toast.error("Failed to update item");
@@ -420,8 +450,18 @@ export function MenuManagement() {
   const downloadTemplate = async () => {
     const XLSX = await getXLSX();
     const ws = XLSX.utils.aoa_to_sheet([
-      ["name", "category", "price", "description", "unit", "hsn", "tax"],
       [
+        "itemCode",
+        "name",
+        "category",
+        "price",
+        "description",
+        "unit",
+        "hsn",
+        "tax",
+      ],
+      [
+        "ITEM001",
         "Butter Chicken",
         "Mains",
         380,
@@ -453,6 +493,7 @@ export function MenuManagement() {
     const newUnitMap = { ...unitMap };
     const newHsnMap = { ...hsnMap };
     const newTaxMap = { ...taxMap };
+    const newItemCodeMap = { ...itemCodeMap };
     try {
       for (const row of rows) {
         const r = row as Record<string, unknown>;
@@ -463,6 +504,7 @@ export function MenuManagement() {
         const unit = (r.unit || "plate").toString().trim();
         const hsn = (r.hsn || "").toString().trim();
         const tax = (r.tax || "5").toString().trim();
+        const itemCode = (r.itemCode || r.item_code || "").toString().trim();
         if (!name) continue;
         await actor.addMenuItemR(
           restaurantId,
@@ -475,6 +517,7 @@ export function MenuManagement() {
         newUnitMap[`_pending_${name}`] = unit;
         newHsnMap[`_pending_${name}`] = hsn;
         newTaxMap[`_pending_${name}`] = tax;
+        newItemCodeMap[`_pending_${name}`] = itemCode;
       }
       const refreshed = await actor.getMenuItemsR(restaurantId);
       for (const item of refreshed) {
@@ -491,6 +534,10 @@ export function MenuManagement() {
           newTaxMap[item.id] = newTaxMap[pendingKey];
           delete newTaxMap[pendingKey];
         }
+        if (newItemCodeMap[pendingKey] !== undefined && !itemCodeMap[item.id]) {
+          newItemCodeMap[item.id] = newItemCodeMap[pendingKey];
+          delete newItemCodeMap[pendingKey];
+        }
       }
       setUnitMap(newUnitMap);
       saveUnitMap(newUnitMap, rid);
@@ -498,6 +545,8 @@ export function MenuManagement() {
       saveHsnMap(newHsnMap, rid);
       setTaxMap(newTaxMap);
       saveTaxMap(newTaxMap, rid);
+      setItemCodeMap(newItemCodeMap);
+      saveItemCodeMap(newItemCodeMap, rid);
       setItems(refreshed);
       toast.success(`Imported ${count} items successfully`);
     } catch {
@@ -506,18 +555,40 @@ export function MenuManagement() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // Build byCategory including uncategorised items
+  // Filter items by search query and status
+  const q = searchQuery.toLowerCase().trim();
+  const filteredItems = items.filter((item) => {
+    const matchSearch =
+      !q ||
+      item.name.toLowerCase().includes(q) ||
+      (itemCodeMap[item.id] ?? "").toLowerCase().includes(q);
+    const matchStatus =
+      filterStatus === "all" ||
+      (filterStatus === "active" && item.available) ||
+      (filterStatus === "inactive" && !item.available);
+    return matchSearch && matchStatus;
+  });
+
   const allCats = [...categories];
   for (const item of items) {
     if (!allCats.includes(item.category)) allCats.push(item.category);
   }
   const byCategory = allCats.reduce(
     (acc, cat) => {
-      acc[cat] = items.filter((i) => i.category === cat);
+      acc[cat] = filteredItems.filter((i) => i.category === cat);
       return acc;
     },
     {} as Record<string, MenuItem[]>,
   );
+
+  // Only show categories that have matching items when searching
+  const visibleCats =
+    q || filterStatus !== "all"
+      ? allCats.filter((cat) => (byCategory[cat]?.length ?? 0) > 0)
+      : allCats;
+
+  const activeCount = items.filter((i) => i.available).length;
+  const inactiveCount = items.filter((i) => !i.available).length;
 
   if (loading) {
     return (
@@ -538,10 +609,11 @@ export function MenuManagement() {
             Menu Management
           </h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {items.length} items across {categories.length} categories
+            {items.length} items &bull; {activeCount} active &bull;{" "}
+            {inactiveCount} inactive
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
           <Button
             variant="outline"
             size="sm"
@@ -579,7 +651,48 @@ export function MenuManagement() {
         </div>
       </div>
 
-      {allCats.map((cat) => (
+      {/* Search & Filter Bar */}
+      <div className="flex gap-3 items-center flex-wrap">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            data-ocid="menu.search.input"
+            className="pl-9 h-9"
+            placeholder="Search by item name or item code..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <div className="flex gap-1 border border-border rounded-lg p-0.5 bg-muted/30">
+          {(["all", "active", "inactive"] as const).map((s) => (
+            <button
+              type="button"
+              key={s}
+              onClick={() => setFilterStatus(s)}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors capitalize ${
+                filterStatus === s
+                  ? "bg-background shadow text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {s === "all"
+                ? `All (${items.length})`
+                : s === "active"
+                  ? `Active (${activeCount})`
+                  : `Inactive (${inactiveCount})`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {visibleCats.length === 0 && (
+        <div className="text-center py-16 text-muted-foreground">
+          <p className="text-lg font-medium">No items found</p>
+          <p className="text-sm mt-1">Try a different search term or filter</p>
+        </div>
+      )}
+
+      {visibleCats.map((cat) => (
         <div
           key={cat}
           className="bg-card border border-border rounded-xl overflow-hidden shadow-card"
@@ -605,10 +718,28 @@ export function MenuManagement() {
                 <div
                   key={item.id}
                   data-ocid={`menu.item.${i + 1}`}
-                  className="px-5 py-3 flex items-center gap-4"
+                  className={`px-5 py-3 flex items-center gap-4 transition-colors ${
+                    !item.available ? "opacity-60 bg-muted/20" : ""
+                  }`}
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-foreground">{item.name}</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-medium text-foreground">{item.name}</p>
+                      {itemCodeMap[item.id] && (
+                        <span className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 px-2 py-0.5 rounded-full font-mono font-semibold">
+                          # {itemCodeMap[item.id]}
+                        </span>
+                      )}
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          item.available
+                            ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300"
+                            : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                        }`}
+                      >
+                        {item.available ? "Active" : "Inactive"}
+                      </span>
+                    </div>
                     {item.description && (
                       <p className="text-sm text-muted-foreground mt-0.5 truncate">
                         {item.description}
@@ -640,11 +771,17 @@ export function MenuManagement() {
                       </span>
                     )}
                   </span>
-                  <Switch
-                    data-ocid={`menu.available.switch.${i + 1}`}
-                    checked={item.available}
-                    onCheckedChange={() => handleToggleAvailable(item)}
-                  />
+                  {/* Active / Deactivate toggle */}
+                  <div className="flex flex-col items-center gap-0.5">
+                    <Switch
+                      data-ocid={`menu.available.switch.${i + 1}`}
+                      checked={item.available}
+                      onCheckedChange={() => handleToggleAvailable(item)}
+                    />
+                    <span className="text-[10px] text-muted-foreground">
+                      {item.available ? "Active" : "Inactive"}
+                    </span>
+                  </div>
                   <Button
                     data-ocid={`menu.edit_button.${i + 1}`}
                     variant="outline"
@@ -678,23 +815,40 @@ export function MenuManagement() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label>Category</Label>
-              <Select
-                value={form.category}
-                onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}
-              >
-                <SelectTrigger className="h-9" data-ocid="menu.category.select">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Item Code</Label>
+                <Input
+                  data-ocid="menu.itemcode.input"
+                  className="h-9 font-mono"
+                  value={form.itemCode}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, itemCode: e.target.value }))
+                  }
+                  placeholder="e.g. ITEM001"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Category</Label>
+                <Select
+                  value={form.category}
+                  onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}
+                >
+                  <SelectTrigger
+                    className="h-9"
+                    data-ocid="menu.category.select"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>Item Name</Label>
@@ -787,18 +941,25 @@ export function MenuManagement() {
                 className="resize-none h-20"
               />
             </div>
-            {editItem && (
-              <div className="flex items-center gap-2">
-                <Switch
-                  data-ocid="menu.available_edit.switch"
-                  checked={form.available}
-                  onCheckedChange={(v) =>
-                    setForm((f) => ({ ...f, available: v }))
-                  }
-                />
-                <Label>Available</Label>
+            <div className="flex items-center gap-3 p-3 bg-muted/40 rounded-lg">
+              <Switch
+                data-ocid="menu.available_edit.switch"
+                checked={form.available}
+                onCheckedChange={(v) =>
+                  setForm((f) => ({ ...f, available: v }))
+                }
+              />
+              <div>
+                <Label className="text-sm font-medium">Item Status</Label>
+                <p
+                  className={`text-xs mt-0.5 font-medium ${form.available ? "text-green-600" : "text-red-500"}`}
+                >
+                  {form.available
+                    ? "Active — visible and available for orders"
+                    : "Inactive — hidden from orders"}
+                </p>
               </div>
-            )}
+            </div>
           </div>
           <DialogFooter>
             <Button
